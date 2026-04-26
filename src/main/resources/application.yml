@@ -3,10 +3,14 @@ spring:
     name: bts
 
   datasource:
-    url: jdbc:h2:mem:testdb
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
+#    url: jdbc:h2:mem:testdb
+#    driver-class-name: org.h2.Driver
+#    username: sa
+#    password:
+    url: ${SUPABASE_DB_URL}
+    driver-class-name: org.postgresql.Driver
+    username: ${SUPABASE_DB_USERNAME}
+    password: ${SUPABASE_DB_PASSWORD}
 
   h2:
     console:
@@ -14,6 +18,7 @@ spring:
       path: /h2-console
 
   jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: update   # ???
     show-sql: true
@@ -21,6 +26,10 @@ spring:
       hibernate:
         format_sql: true
     open-in-view: false
+
+
+  config:
+    import: optional:file:.env[.properties] # .env를 properties 형식으로 읽음
 
 server:
   port: 8080
