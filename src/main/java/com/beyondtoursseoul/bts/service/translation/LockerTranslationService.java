@@ -1,7 +1,7 @@
 package com.beyondtoursseoul.bts.service.translation;
 
-import com.beyondtoursseoul.bts.domain.LockerTranslation;
-import com.beyondtoursseoul.bts.repository.LockerTranslationRepository;
+import com.beyondtoursseoul.bts.domain.locker.LockerTranslation;
+import com.beyondtoursseoul.bts.repository.locker.LockerTranslationRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

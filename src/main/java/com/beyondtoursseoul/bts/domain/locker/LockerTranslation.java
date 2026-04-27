@@ -1,4 +1,4 @@
-package com.beyondtoursseoul.bts.domain;
+package com.beyondtoursseoul.bts.domain.locker;
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;

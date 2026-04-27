@@ -1,6 +1,6 @@
-package com.beyondtoursseoul.bts.repository;
+package com.beyondtoursseoul.bts.repository.locker;
 
-import com.beyondtoursseoul.bts.domain.Locker;
+import com.beyondtoursseoul.bts.domain.locker.Locker;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;

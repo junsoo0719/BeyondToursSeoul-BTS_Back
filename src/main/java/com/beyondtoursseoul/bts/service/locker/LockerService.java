@@ -1,9 +1,9 @@
-package com.beyondtoursseoul.bts.service;
+package com.beyondtoursseoul.bts.service.locker;
 
-import com.beyondtoursseoul.bts.domain.Locker;
-import com.beyondtoursseoul.bts.domain.LockerTranslation;
-import com.beyondtoursseoul.bts.dto.LockerApiResponseDto;
-import com.beyondtoursseoul.bts.repository.LockerRepository;
+import com.beyondtoursseoul.bts.domain.locker.Locker;
+import com.beyondtoursseoul.bts.domain.locker.LockerTranslation;
+import com.beyondtoursseoul.bts.dto.locker.LockerResponseDto;
+import com.beyondtoursseoul.bts.repository.locker.LockerRepository;
 import com.beyondtoursseoul.bts.service.translation.LockerTranslationService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,16 +43,16 @@ public class LockerService {
     /**
      * 물품보관함 api 호출 및 DTO 변환
      */
-    public LockerApiResponseDto fetchLockerData() {
+    public LockerResponseDto fetchLockerData() {
         // 요청 url
         String apiUrl = String.format("http://openapi.seoul.go.kr:8088/%s/json/getFcLckr/1/2/", seoulOpenApiKey);
         log.info("Calling Locker API: {}", apiUrl);
 
         // DTO 클래스로 파싱
-        LockerApiResponseDto responseDto = restClient.get()
+        LockerResponseDto responseDto = restClient.get()
                 .uri(apiUrl)
                 .retrieve()
-                .body(LockerApiResponseDto.class);
+                .body(LockerResponseDto.class);
 
         // 변경된 DTO 구조에 맞게 로그 출력 수정
         if (responseDto != null && responseDto.getResponse() != null
@@ -70,7 +70,7 @@ public class LockerService {
     @Transactional
     public void syncLockerDataToDb() {
         // 1. API 응답 데이터 가져오기
-        LockerApiResponseDto responseDto = fetchLockerData();
+        LockerResponseDto responseDto = fetchLockerData();
 
         // null값 처리
         if (responseDto == null || responseDto.getResponse().getBody().getItems() == null) {
@@ -78,17 +78,17 @@ public class LockerService {
             return;
         }
 
-        List<LockerApiResponseDto.Item> rawItems = responseDto.getResponse().getBody().getItems().getItem();
+        List<LockerResponseDto.Item> rawItems = responseDto.getResponse().getBody().getItems().getItem();
 
         // Map을 사용하여 lckrId를 기준으로 중복된 데이터 제거
-        Map<String, LockerApiResponseDto.Item> uniqueItemsMap = new HashMap<>();
-        for (LockerApiResponseDto.Item item : rawItems) {
+        Map<String, LockerResponseDto.Item> uniqueItemsMap = new HashMap<>();
+        for (LockerResponseDto.Item item : rawItems) {
             // putIfAbsent: 만약 같은 lckrId가 여러 번 들어오면 첫 번째 것만 남기고 무시
             uniqueItemsMap.putIfAbsent(item.getLckrId(), item);
         }
 
         // 하나씩 순회하며 DB에 반영(Upsert)
-        for (LockerApiResponseDto.Item item : uniqueItemsMap.values()) {
+        for (LockerResponseDto.Item item : uniqueItemsMap.values()) {
             
             // 추가 요금 단위 시간이 숫자가 아닐 경우를 대비해 안전하게 변환합니다.
             int addChargeUnit = 60;

@@ -1,4 +1,4 @@
-package com.beyondtoursseoul.bts.dto;
+package com.beyondtoursseoul.bts.dto.locker;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
@@ -13,7 +13,7 @@ import java.util.List;
 @Getter
 @NoArgsConstructor
 @ToString
-public class LockerApiResponseDto {
+public class LockerResponseDto {
 
     private Response response;
 

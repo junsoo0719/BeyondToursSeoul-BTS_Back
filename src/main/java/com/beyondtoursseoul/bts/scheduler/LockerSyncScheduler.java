@@ -1,6 +1,6 @@
 package com.beyondtoursseoul.bts.scheduler;
 
-import com.beyondtoursseoul.bts.service.LockerService;
+import com.beyondtoursseoul.bts.service.locker.LockerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
