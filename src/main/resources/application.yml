@@ -24,6 +24,7 @@ spring:
         jwt:
           issuer-uri: ${SUPABASE_JWT_ISSUER}
           jwk-set-uri: ${SUPABASE_JWT_JWKS_URI}
+          jws-algorithms: ES256
 
   config:
     import: optional:file:.env[.properties] # .env파일에서 환경변수 로드

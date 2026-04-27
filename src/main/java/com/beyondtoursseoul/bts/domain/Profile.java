@@ -1,0 +1,41 @@
+package com.beyondtoursseoul.bts.domain;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
+@Entity
+@Table(name = "profiles")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+public class Profile {
+
+    @Id
+    @Column(columnDefinition = "uuid")
+    private UUID id;
+
+    private String nickname;
+
+    @Column(name = "preferred_language")
+    private String preferredLanguage;
+
+    @Column(name = "visit_count")
+    private Integer visitCount;
+
+    @Column(name = "local_preference")
+    private String localPreference;
+
+    @Column(name = "created_at")
+    private OffsetDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private OffsetDateTime updatedAt;
+
+}
