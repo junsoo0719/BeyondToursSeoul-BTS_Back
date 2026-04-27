@@ -30,7 +30,7 @@ spring:
 
 
   config:
-    import: optional:file:.env[.properties] # .env를 properties 형식으로 읽음
+    import: optional:file:.env[.properties] # .env파일에서 환경변수 로드
 
 server:
   port: 8080
@@ -39,3 +39,12 @@ logging:
   level:
     org.hibernate.SQL: debug
     org.hibernate.type.descriptor.sql: trace
+
+seoul:
+  open-api:
+    key: ${SEOUL_OPEN_API_KEY}
+
+google:
+  translation:
+    api:
+      key: ${GOOGLE_TRANSLATION_API_KEY}
