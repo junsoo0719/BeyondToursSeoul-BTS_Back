@@ -22,7 +22,7 @@ public class AttractionLocalScoreId implements Serializable {
 
     private Integer hour;
 
-    public AttractionLocalScoreIrd(Long attractionId, LocalDate date, Integer hour) {
+    public AttractionLocalScoreId(Long attractionId, LocalDate date, Integer hour) {
         this.attractionId = attractionId;
         this.date = date;
         this.hour = hour;
