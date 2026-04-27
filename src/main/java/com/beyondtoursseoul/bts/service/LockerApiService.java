@@ -28,7 +28,7 @@ public class LockerApiService {
     private final LockerRepository lockerRepository;
 
     // api값 가져옴
-    @Value("${SEOUL_OPEN_API_KEY}")
+    @Value("${seoul.open-api.key}")
     private String seoulOpenApiKey;
 
     public LockerApiService(LockerRepository lockerRepository) {
@@ -42,7 +42,7 @@ public class LockerApiService {
      */
     public LockerApiResponseDto fetchLockerData() {
         // 요청 url
-        String apiUrl = String.format("http://openapi.seoul.go.kr:8088/%s/json/getFcLckr/1/400/", seoulOpenApiKey);
+        String apiUrl = String.format("http://openapi.seoul.go.kr:8088/%s/json/getFcLckr/1/2/", seoulOpenApiKey);
         log.info("Calling Locker API: {}", apiUrl);
 
         // DTO 클래스로 파싱
@@ -54,8 +54,8 @@ public class LockerApiService {
         // 변경된 DTO 구조에 맞게 로그 출력 수정
         if (responseDto != null && responseDto.getResponse() != null
                 && responseDto.getResponse().getBody() != null) {
-            log.info("성공적으로 데이터를 파싱했습니다. 총 개수: {}",
-                    responseDto.getResponse().getBody().getTotalCount());
+            log.info("성공적으로 데이터를 파싱했습니다. 개수: {}",
+                    responseDto.getResponse().getBody().getNumOfRows());
         }
 
         return responseDto;
