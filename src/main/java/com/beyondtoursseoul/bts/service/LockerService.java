@@ -4,6 +4,7 @@ import com.beyondtoursseoul.bts.domain.Locker;
 import com.beyondtoursseoul.bts.domain.LockerTranslation;
 import com.beyondtoursseoul.bts.dto.LockerApiResponseDto;
 import com.beyondtoursseoul.bts.repository.LockerRepository;
+import com.beyondtoursseoul.bts.service.translation.LockerTranslationService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -21,19 +22,21 @@ import java.util.Optional;
 
 @Slf4j
 @Service
-public class LockerApiService {
+public class LockerService {
 
     // http 클라이언트
     private final RestClient restClient;
     private final LockerRepository lockerRepository;
+    private final LockerTranslationService lockerTranslationService;
 
     // api값 가져옴
     @Value("${seoul.open-api.key}")
     private String seoulOpenApiKey;
 
-    public LockerApiService(LockerRepository lockerRepository) {
+    public LockerService(LockerRepository lockerRepository, LockerTranslationService lockerTranslationService) {
         this.restClient = RestClient.create();
         this.lockerRepository = lockerRepository;
+        this.lockerTranslationService = lockerTranslationService;
     }
 
 
@@ -62,7 +65,7 @@ public class LockerApiService {
     }
 
     /**
-     * 물품보관함 데이터 최신화 (하루 1번 호출용)
+     * 물품보관함 데이터 최신화 (2주에 1번 호출)
      */
     @Transactional
     public void syncLockerDataToDb() {
@@ -77,18 +80,17 @@ public class LockerApiService {
 
         List<LockerApiResponseDto.Item> rawItems = responseDto.getResponse().getBody().getItems().getItem();
 
-        // [필수 방어] 서울시 데이터 자체에 중복된 ID가 섞여서 오는 경우가 있습니다.
-        // Map을 사용하여 lckrId를 기준으로 중복된 데이터를 하나로 깔끔하게 정리합니다.
+        // Map을 사용하여 lckrId를 기준으로 중복된 데이터 제거
         Map<String, LockerApiResponseDto.Item> uniqueItemsMap = new HashMap<>();
         for (LockerApiResponseDto.Item item : rawItems) {
-            // putIfAbsent: 만약 같은 lckrId가 여러 번 들어오면 첫 번째 것만 남기고 무시합니다.
+            // putIfAbsent: 만약 같은 lckrId가 여러 번 들어오면 첫 번째 것만 남기고 무시
             uniqueItemsMap.putIfAbsent(item.getLckrId(), item);
         }
 
-        // 2. 중복이 제거된 깔끔한 데이터들을 하나씩 순회하며 DB에 반영(Upsert)합니다.
+        // 하나씩 순회하며 DB에 반영(Upsert)
         for (LockerApiResponseDto.Item item : uniqueItemsMap.values()) {
             
-            // [방어 로직] 추가 요금 단위 시간이 숫자가 아닐 경우를 대비해 안전하게 변환합니다.
+            // 추가 요금 단위 시간이 숫자가 아닐 경우를 대비해 안전하게 변환합니다.
             int addChargeUnit = 60;
             try {
                 if (item.getAddCrgUnitHr() != null && !item.getAddCrgUnitHr().isBlank()) {
@@ -171,6 +173,9 @@ public class LockerApiService {
         }
 
         log.info("성공적으로 {}개의 물품보관함 데이터를 최신화했습니다!", uniqueItemsMap.size());
+
+        /// 번역도 추가적으로 진행해서 전체 패치
+        lockerTranslationService.translateAllKoToMultiLang();
     }
 
 }

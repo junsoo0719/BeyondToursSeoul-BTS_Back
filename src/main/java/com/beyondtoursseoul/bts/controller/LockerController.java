@@ -1,7 +1,8 @@
 package com.beyondtoursseoul.bts.controller;
 
 import com.beyondtoursseoul.bts.dto.LockerApiResponseDto;
-import com.beyondtoursseoul.bts.service.LockerApiService;
+import com.beyondtoursseoul.bts.service.LockerService;
+import com.beyondtoursseoul.bts.service.translation.LockerTranslationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,19 +16,28 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class LockerController {
 
-    private final LockerApiService lockerApiService;
+    private final LockerService lockerService;
+    private final LockerTranslationService lockerTranslationService;
 
+    /// 물품보관함 데이터 호출 api
     @GetMapping("/test")
     public LockerApiResponseDto testLockerApi() {
-        // String이 아닌 우리가 만든 DTO 형식으로 JSON을 예쁘게 반환합니다.
-        return lockerApiService.fetchLockerData();
+        return lockerService.fetchLockerData();
     }
 
-    // 추가: DB에 저장하는 동작을 트리거하는 엔드포인트
+    /// DB에 물품보관함 데이터 insert, update 하는 메서드 - 번역 포함 (2주에 한 번 스케쥴링 설정)
     @PostMapping("/sync")
     public String syncLockerData() {
         log.info("컨트롤러 진입");
-        lockerApiService.syncLockerDataToDb();
+        lockerService.syncLockerDataToDb();
         return "데이터 동기화 완료! DB(Supabase)를 확인해보세요.";
     }
+
+    /// 번역 메서드 (주석)
+//    @PostMapping("translate-test")
+//    public String triggerTranslation() {
+//        log.info("번역 프로세스 시작");
+//        lockerTranslationService.translateAllKoToMultiLang();
+//        return "번역 작업 완료. DB를 확인해보세요.";
+//    }
 }
