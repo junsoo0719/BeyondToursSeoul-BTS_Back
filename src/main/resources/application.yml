@@ -3,20 +3,10 @@ spring:
     name: bts
 
   datasource:
-#    url: jdbc:h2:mem:testdb
-#    driver-class-name: org.h2.Driver
-#    username: sa
-#    password:
     url: ${SUPABASE_DB_URL}
     driver-class-name: org.postgresql.Driver
     username: ${SUPABASE_DB_USERNAME}
     password: ${SUPABASE_DB_PASSWORD}
-
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
-
 
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
@@ -40,7 +30,6 @@ spring:
 
 server:
   port: 8080
-
 
 logging:
   level:
