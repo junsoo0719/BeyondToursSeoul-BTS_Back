@@ -22,8 +22,8 @@ public class AttractionLocalScore {
     private BigDecimal score;
 
     @Builder
-    public AttractionLocalScore(Long attractionId, LocalDate date, Integer hour, BigDecimal score) {
-        this.id = new AttractionLocalScoreId(attractionId, date, hour);
+    public AttractionLocalScore(Long attractionId, LocalDate date, String timeSlot, BigDecimal score) {
+        this.id = new AttractionLocalScoreId(attractionId, date, timeSlot);
         this.score = score;
     }
 }

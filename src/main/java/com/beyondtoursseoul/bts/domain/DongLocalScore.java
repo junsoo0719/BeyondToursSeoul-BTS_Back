@@ -5,7 +5,6 @@ import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
@@ -24,20 +23,21 @@ public class DongLocalScore {
 
     private LocalDate date;
 
-    private Integer hour;
+    @Column(name = "time_slot", length = 20)
+    private String timeSlot;
 
     @Column(precision = 5, scale = 2)
     private BigDecimal score;
 
-    @Column(name = "breakdown_json", columnDefinition = "jsonb")
+    @Column(name = "breakdown_json", columnDefinition = "text")
     private String breakdownJson;
 
     @Builder
-    public DongLocalScore(String dongCode, LocalDate date, Integer hour,
+    public DongLocalScore(String dongCode, LocalDate date, String timeSlot,
                           BigDecimal score, String breakdownJson) {
         this.dongCode = dongCode;
         this.date = date;
-        this.hour = hour;
+        this.timeSlot = timeSlot;
         this.score = score;
         this.breakdownJson = breakdownJson;
     }

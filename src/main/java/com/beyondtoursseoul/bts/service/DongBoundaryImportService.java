@@ -31,13 +31,13 @@ public class DongBoundaryImportService {
 
         for (JsonNode feature : features) {
             JsonNode properties = feature.get("properties");
-            String admCd = properties.get("adm_cd").asText();
+            String admCd2 = properties.get("adm_cd2").asText();
 
             // 서울만 적재 (코드 앞 2자리 = 11)
-            if (!admCd.startsWith("11")) continue;
+            if (!admCd2.startsWith("11")) continue;
 
-            // 10자리 → 8자리 통일 (생활인구 API 기준)
-            String dongCode = admCd.length() > 8 ? admCd.substring(0, 8) : admCd;
+            // adm_cd2(10자리) 앞 8자리 = 생활인구 API ADSTRD_CODE_SE와 동일
+            String dongCode = admCd2.length() >= 8 ? admCd2.substring(0, 8) : admCd2;
             String dongName = properties.get("adm_nm").asText();
             String geomJson = objectMapper.writeValueAsString(feature.get("geometry"));
 
