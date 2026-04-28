@@ -45,3 +45,8 @@ google:
   translation:
     api:
       key: ${GOOGLE_TRANSLATION_API_KEY}
+
+visit:
+  seoul:
+    api:
+      key: ${VISIT_SEOUL_API_KEY}
