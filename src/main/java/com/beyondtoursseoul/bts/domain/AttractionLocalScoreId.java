@@ -20,11 +20,12 @@ public class AttractionLocalScoreId implements Serializable {
 
     private LocalDate date;
 
-    private Integer hour;
+    @Column(name = "time_slot", length = 20)
+    private String timeSlot;
 
-    public AttractionLocalScoreId(Long attractionId, LocalDate date, Integer hour) {
+    public AttractionLocalScoreId(Long attractionId, LocalDate date, String timeSlot) {
         this.attractionId = attractionId;
         this.date = date;
-        this.hour = hour;
+        this.timeSlot = timeSlot;
     }
 }

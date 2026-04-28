@@ -8,7 +8,9 @@ import java.util.List;
 
 public interface DongLocalScoreRepository extends JpaRepository<DongLocalScore, Long> {
 
-    boolean existsByDongCodeAndDateAndHour(String dongCode, LocalDate date, Integer hour);
+    boolean existsByDongCodeAndDateAndTimeSlot(String dongCode, LocalDate date, String timeSlot);
 
     List<DongLocalScore> findByDate(LocalDate date);
+
+    void deleteByDateAndTimeSlot(LocalDate date, String timeSlot);
 }
