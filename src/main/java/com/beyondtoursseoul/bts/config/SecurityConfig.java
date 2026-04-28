@@ -29,14 +29,26 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         // 회원가입/로그인 API는 인증 없이 접근 가능해야 한다.
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/signup").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/signup")
+                        .permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/login")
+                        .permitAll()
                         // 서버 상태 확인용 경로는 공개한다.
-                        .requestMatchers(HttpMethod.GET, "/health").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/health")
+                        .permitAll()
                         // 현재 로그인 사용자 확인 API는 JWT 인증이 필요하다.
-                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/me")
+                        .authenticated()
+                        // swagger 경로 허용
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html"
+                        ).permitAll()
                         // 아직 분류하지 않은 기존 API는 임시로 열어둔다.
-                        .anyRequest().permitAll()
+                        .anyRequest()
+                        .permitAll()
                 )
                 // Supabase가 발급한 JWT를 Resource Server 방식으로 검증한다.
                 .oauth2ResourceServer(oauth2 ->
