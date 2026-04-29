@@ -7,6 +7,8 @@ import com.beyondtoursseoul.bts.dto.auth.MeResponse;
 import com.beyondtoursseoul.bts.dto.auth.SignupRequest;
 import com.beyondtoursseoul.bts.repository.ProfileRepository;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,7 @@ import java.util.UUID;
 public class SupabaseAuthService implements AuthService {
 
     private final ProfileRepository profileRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final RestClient restClient = RestClient.create();
 
     @Value("${SUPABASE_URL}")
@@ -42,9 +45,50 @@ public class SupabaseAuthService implements AuthService {
                 .retrieve()
                 .body(String.class);
 
-        System.out.println("signup raw response = " + rawResponse);
+        try {
+            JsonNode root = objectMapper.readTree(rawResponse);
 
-        throw new IllegalStateException(rawResponse);
+            if (root.isMissingNode() || root.isNull()) {
+                throw new IllegalStateException("회원가입 응답이 올바르지 않습니다.");
+            }
+
+            String accessToken = root.path("access_token").isMissingNode() || root.path("access_token").isNull()
+                    ? null
+                    : root.path("access_token").asText();
+
+            String refreshToken = root.path("refresh_token").isMissingNode() || root.path("refresh_token").isNull()
+                    ? null
+                    : root.path("refresh_token").asText();
+
+            String tokenType = root.path("token_type").isMissingNode() || root.path("token_type").isNull()
+                    ? null
+                    : root.path("token_type").asText();
+
+            Long expiresIn = root.path("expires_in").isMissingNode() || root.path("expires_in").isNull()
+                    ? null
+                    : root.path("expires_in").asLong();
+
+            String userId = root.path("id").asText(null);
+            String email = root.path("email").asText(null);
+
+            String message = accessToken == null
+                    ? "회원가입 완료. 이메일 인증 후 로그인하세요."
+                    : "회원가입 및 로그인 완료";
+
+            return new AuthResponse(
+                    accessToken,
+                    refreshToken,
+                    tokenType,
+                    expiresIn,
+                    userId,
+                    email,
+                    message
+            );
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("회원가입 응답 파싱에 실패했습니다.", e);
+        }
     }
 
     @Override
