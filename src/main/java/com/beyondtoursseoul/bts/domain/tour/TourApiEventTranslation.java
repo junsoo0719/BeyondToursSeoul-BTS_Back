@@ -35,7 +35,6 @@ public class TourApiEventTranslation {
     @Column(name = "address")
     private String address; // 주소
 
-    @Lob
     @Column(name = "overview", columnDefinition = "TEXT")
     private String overview; // [상세-공통] 행사 개요
 
@@ -54,7 +53,6 @@ public class TourApiEventTranslation {
     @Column(name = "use_time_festival", length = 1000)
     private String useTimeFestival; // [상세-소개] 이용 요금/참가비 정보
 
-    @Lob
     @Column(name = "program", columnDefinition = "TEXT")
     private String program; // [상세-소개] 주요 프로그램 내용
 

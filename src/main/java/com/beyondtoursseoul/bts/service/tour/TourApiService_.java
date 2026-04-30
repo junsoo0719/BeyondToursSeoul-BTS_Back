@@ -50,6 +50,7 @@ public class TourApiService_ {
 
     /**
      * 특정 언어에 대한 서울 지역 축제/행사 정보를 전체 동기화합니다.
+     *
      * @param lang 수집할 언어 설정
      */
     @Transactional
@@ -71,6 +72,7 @@ public class TourApiService_ {
 
     /**
      * 테스트용: 첫 번째 한 건의 데이터만 상세 정보까지 포함하여 동기화합니다.
+     *
      * @param lang 수집할 언어 설정
      */
     @Transactional
@@ -107,8 +109,9 @@ public class TourApiService_ {
                 TourApiEvent managedEvent = eventRepository.save(event); // JPA 관리하도록 새로운 변수에 할당
 
                 // 번역본 처리(upsert)
-                TourApiEventTranslation translation = translationRepository.findByEventAndLanguage(managedEvent, lang).orElseGet(
-                        () -> TourApiEventTranslation.builder().event(managedEvent).language(lang).build());
+                TourApiEventTranslation translation = translationRepository.findByEventAndLanguage(managedEvent, lang)
+                        .orElseGet(
+                                () -> TourApiEventTranslation.builder().event(managedEvent).language(lang).build());
 
                 translation.setTitle(dto.getTitle());
                 translation.setAddress(dto.getAddr1() + (dto.getAddr2() != null ? " " + dto.getAddr2() : ""));
@@ -119,8 +122,8 @@ public class TourApiService_ {
                 // 변경된 상세 정보 및 이미지 컬렉션 저장
                 translationRepository.save(translation);
             } catch (Exception e) {
-                log.error("[Sync Error] contentId: {} 처리 중 에러 발생. 다음 아이템으로 넘어갑니다. 에러: {}", 
-                    dto.getContentId(), e.getMessage());
+                log.error("[Sync Error] contentId: {} 처리 중 에러 발생. 다음 아이템으로 넘어갑니다. 에러: {}",
+                        dto.getContentId(), e.getMessage());
                 // 루프가 멈추지 않도록 예외를 삼키고 다음 아이템 진행
             }
         }
@@ -137,8 +140,8 @@ public class TourApiService_ {
         // 1. 공통 정보 조회 (개요, 홈페이지, 전화번호 명칭 등)
         TourApiDetailCommonItemDto commonDto = fetchDetailCommon(contentId, lang);
         if (commonDto != null) {
-            log.info("[Detail Sync] 공통 정보 수집 완료 (overview 길이: {})", 
-                commonDto.getOverview() != null ? commonDto.getOverview().length() : 0);
+            log.info("[Detail Sync] 공통 정보 수집 완료 (overview 길이: {})",
+                    commonDto.getOverview() != null ? commonDto.getOverview().length() : 0);
             translation.setOverview(commonDto.getOverview());
             translation.setHomepage(commonDto.getHomepage());
             translation.setTelName(commonDto.getTelName());
@@ -188,7 +191,7 @@ public class TourApiService_ {
     private TourApiDetailCommonItemDto fetchDetailCommon(Long contentId, TourLanguage lang) {
         String servicePath = lang.getServiceName() + "/detailCommon2";
         log.info("[API Request] DetailCommon - path: {}, contentId: {}", servicePath, contentId);
-        
+
         try {
             TourApiResponseDto<TourApiDetailCommonItemDto> response = restClient.get()
                     .uri(uriBuilder -> uriBuilder.path(servicePath)
@@ -206,7 +209,11 @@ public class TourApiService_ {
                     .retrieve().body(new ParameterizedTypeReference<TourApiResponseDto<TourApiDetailCommonItemDto>>() {
                     });
 
-            if (response != null && response.getResponse().getBody().getItems() != null && !response.getResponse().getBody().getItems().getItem().isEmpty()) {
+            if (response != null && response.getResponse().getBody().getItems() != null && !response.getResponse()
+                    .getBody()
+                    .getItems()
+                    .getItem()
+                    .isEmpty()) {
                 return response.getResponse().getBody().getItems().getItem().get(0);
             }
         } catch (Exception e) {
@@ -236,7 +243,11 @@ public class TourApiService_ {
                     .retrieve().body(new ParameterizedTypeReference<TourApiResponseDto<TourApiDetailIntroItemDto>>() {
                     });
 
-            if (response != null && response.getResponse().getBody().getItems() != null && !response.getResponse().getBody().getItems().getItem().isEmpty()) {
+            if (response != null && response.getResponse().getBody().getItems() != null && !response.getResponse()
+                    .getBody()
+                    .getItems()
+                    .getItem()
+                    .isEmpty()) {
                 return response.getResponse().getBody().getItems().getItem().get(0);
             }
         } catch (Exception e) {
@@ -262,7 +273,6 @@ public class TourApiService_ {
                             .queryParam("_type", "json")
                             .queryParam("contentId", contentId)
                             .queryParam("imageYN", "Y")
-//                            .queryParam("subImageYN", "Y")
                             .build())
                     .retrieve().body(new ParameterizedTypeReference<TourApiResponseDto<TourApiDetailImageItemDto>>() {
                     });
@@ -270,11 +280,19 @@ public class TourApiService_ {
             if (response != null && response.getResponse().getBody().getItems() != null) {
                 return response.getResponse().getBody().getItems().getItem();
             }
+
+        } catch (org.springframework.http.converter.HttpMessageConversionException e) {
+            // Tour API 특성상 이미지가 없으면 "items": "" 형태로 응답하여 파싱 에러가 발생함
+            log.warn("[API Warn] 상세 이미지가 없습니다 (파싱 에러 처리). contentId: {}", contentId);
+            return List.of(); // 빈 리스트를 반환하여 로직이 계속 진행되도록 함
+
         } catch (Exception e) {
-            log.error("[API Error] DetailImage 호출 실패: {}", e.getMessage());
-            throw e;
+            // 그 외의 진짜 통신 에러 등
+            log.error("[API Error] DetailImage 호출 실패 - contentId: {}, 에러: {}", contentId, e.getMessage());
+            return List.of(); // 예외를 던지지 않고 빈 리스트를 반환해 다른 상세정보라도 저장되도록 처리
         }
-        return null;
+
+        return List.of();
     }
 
     /**
