@@ -60,14 +60,6 @@ public class TourApiEventItemDto {
     @Schema(description = "행사 종료일 (YYYYMMDD)", example = "20260503")
     private String eventEndDate;
 
-    @JsonAlias("areacode")
-    @Schema(description = "지역 코드", example = "1")
-    private String areaCode;
-
-    @JsonAlias("sigungucode")
-    @Schema(description = "시군구 코드", example = "1")
-    private String sigunguCode;
-
     @JsonAlias("lDongRegnCd")
     @Schema(description = "법정동 지역코드 (서울: 11)", example = "11")
     private String localRegionCode;
