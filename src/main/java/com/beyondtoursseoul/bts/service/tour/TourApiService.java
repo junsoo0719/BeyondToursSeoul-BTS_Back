@@ -25,7 +25,7 @@ import java.util.List;
  */
 @Slf4j
 @Service
-public class TourApiService_ {
+public class TourApiService {
 
     private final TourApiEventRepository eventRepository;
     private final TourApiEventTranslationRepository translationRepository;
@@ -38,9 +38,9 @@ public class TourApiService_ {
     private static final String PUBLIC_DATA_API_URL =
             "https://apis.data.go.kr/B551011/";
 
-    public TourApiService_(TourApiEventRepository eventRepository,
-                           TourApiEventTranslationRepository translationRepository,
-                           TourApiEventImageRepository imageRepository) {
+    public TourApiService(TourApiEventRepository eventRepository,
+                          TourApiEventTranslationRepository translationRepository,
+                          TourApiEventImageRepository imageRepository) {
         this.eventRepository = eventRepository;
         this.translationRepository = translationRepository;
         this.imageRepository = imageRepository;

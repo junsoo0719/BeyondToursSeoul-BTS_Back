@@ -3,7 +3,7 @@ package com.beyondtoursseoul.bts.controller.tour;
 import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.tour.TourApiEventItemDto;
 import com.beyondtoursseoul.bts.dto.tour.TourApiResponseDto;
-import com.beyondtoursseoul.bts.service.tour.TourApiService_;
+import com.beyondtoursseoul.bts.service.tour.TourApiService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class TourController {
 
-    private final TourApiService_ tourApiService;
+    private final TourApiService tourApiService;
 
     /**
      * 1. API 호출 결과 DTO로 즉시 확인 (DB 저장 X)
