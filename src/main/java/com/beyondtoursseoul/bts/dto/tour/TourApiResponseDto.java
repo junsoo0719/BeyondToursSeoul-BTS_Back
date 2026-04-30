@@ -1,5 +1,6 @@
 package com.beyondtoursseoul.bts.dto.tour;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import java.util.List;
@@ -35,8 +36,10 @@ public class TourApiResponseDto<T> {
         private int totalCount;
     }
 
+
     @Data
     public static class Items<T> {
+        @JsonFormat(with = JsonFormat.Feature.ACCEPT_SINGLE_VALUE_AS_ARRAY)
         private List<T> item;
     }
 }
