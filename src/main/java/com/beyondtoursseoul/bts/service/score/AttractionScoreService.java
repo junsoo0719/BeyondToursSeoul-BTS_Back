@@ -7,8 +7,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
-import java.util.Arrays;
-import java.util.List;
 
 @Slf4j
 @Service
@@ -18,10 +16,6 @@ public class AttractionScoreService {
     private final JdbcTemplate jdbcTemplate;
     private final AttractionLocalScoreRepository repository;
 
-    private static final List<String> ALL_TIME_SLOTS = Arrays.stream(TimeSlot.values())
-            .map(TimeSlot::getCode)
-            .toList();
-
     public void calculateAndSave(LocalDate date) {
         if (repository.existsByIdDate(date)) {
             log.info("[AttractionScore] {} 이미 계산됨 — 스킵", date);
@@ -29,25 +23,25 @@ public class AttractionScoreService {
         }
 
         int total = 0;
-        for (String timeSlot : ALL_TIME_SLOTS) {
+        for (TimeSlot timeSlot : TimeSlot.values()) {
             int count = insertForTimeSlot(date, timeSlot);
             total += count;
-            log.info("[AttractionScore] {} {} — {}건 저장", date, timeSlot, count);
+            log.info("[AttractionScore] {} {} — {}건 저장", date, timeSlot.getCode(), count);
         }
 
         log.info("[AttractionScore] 완료: {} 총 {}건", date, total);
     }
 
-    private int insertForTimeSlot(LocalDate date, String timeSlot) {
+    private int insertForTimeSlot(LocalDate date, TimeSlot timeSlot) {
         return jdbcTemplate.update("""
-                INSERT INTO attraction_local_score (attraction_id, date, time_slot, score)
-                SELECT a.id, ?, ?, s.score
+                INSERT INTO attraction_local_score (attraction_id, date, time_slot, hour, score)
+                SELECT a.id, ?, ?, ?, s.score
                 FROM attraction a
                 JOIN dong_local_score s ON s.dong_code = a.dong_code
                 WHERE s.date = ? AND s.time_slot = ?
                   AND a.dong_code IS NOT NULL
                 ON CONFLICT (attraction_id, date, time_slot) DO UPDATE SET score = EXCLUDED.score
-                """, date, timeSlot, date, timeSlot);
+                """, date, timeSlot.getCode(), timeSlot.getStartHour(), date, timeSlot.getCode());
     }
 
     // Approach C: contentTypeId 기준 대표 시간대

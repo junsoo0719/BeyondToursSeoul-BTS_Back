@@ -28,11 +28,11 @@ class AttractionScoreServiceTest {
     void 신규_날짜면_전체_시간대_5회_INSERT한다() {
         LocalDate date = LocalDate.of(2026, 4, 28);
         when(repository.existsByIdDate(date)).thenReturn(false);
-        when(jdbcTemplate.update(any(String.class), any(), any(), any(), any())).thenReturn(100);
+        when(jdbcTemplate.update(any(String.class), any(), any(), any(), any(), any())).thenReturn(100);
 
         service.calculateAndSave(date);
 
-        verify(jdbcTemplate, times(TimeSlot.values().length)).update(any(String.class), any(), any(), any(), any());
+        verify(jdbcTemplate, times(TimeSlot.values().length)).update(any(String.class), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -42,7 +42,7 @@ class AttractionScoreServiceTest {
 
         service.calculateAndSave(date);
 
-        verify(jdbcTemplate, never()).update(any(String.class), any(), any(), any(), any());
+        verify(jdbcTemplate, never()).update(any(String.class), any(), any(), any(), any(), any());
     }
 
     @Test

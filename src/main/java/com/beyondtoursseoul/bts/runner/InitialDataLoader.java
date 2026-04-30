@@ -84,11 +84,17 @@ public class InitialDataLoader implements ApplicationRunner {
             log.info("관광지 행정동 매핑이 이미 완료되어 있습니다.");
         }
 
-        log.info("관광지 찐로컬 지수 계산 시작: {}", latestDate);
-        try {
-            attractionScoreService.calculateAndSave(latestDate);
-        } catch (Exception e) {
-            log.warn("관광지 찐로컬 지수 계산 실패 (건너뜀): {}", e.getMessage());
-        }
+        // dong_local_score에 실제로 존재하는 최신 날짜 기준으로 계산 (latestDate와 불일치 방지)
+        scoreRepository.findTopByOrderByDateDesc().ifPresentOrElse(
+                latestScore -> {
+                    log.info("관광지 찐로컬 지수 계산 시작: {}", latestScore.getDate());
+                    try {
+                        attractionScoreService.calculateAndSave(latestScore.getDate());
+                    } catch (Exception e) {
+                        log.warn("관광지 찐로컬 지수 계산 실패 (건너뜀): {}", e.getMessage());
+                    }
+                },
+                () -> log.warn("dong_local_score 데이터가 없어 관광지 지수 계산을 건너뜁니다.")
+        );
     }
 }
