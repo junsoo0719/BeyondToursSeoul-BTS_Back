@@ -8,6 +8,7 @@ import com.beyondtoursseoul.bts.dto.tour.*;
 import com.beyondtoursseoul.bts.repository.tour.TourApiEventImageRepository;
 import com.beyondtoursseoul.bts.repository.tour.TourApiEventRepository;
 import com.beyondtoursseoul.bts.repository.tour.TourApiEventTranslationRepository;
+import com.beyondtoursseoul.bts.service.translation.GoogleTranslationService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -18,6 +19,7 @@ import org.springframework.web.client.RestClient;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 관광공사 Tour API 4.0 연동 서비스
@@ -30,6 +32,7 @@ public class TourApiService {
     private final TourApiEventRepository eventRepository;
     private final TourApiEventTranslationRepository translationRepository;
     private final TourApiEventImageRepository imageRepository;
+    private final GoogleTranslationService translationService;
     private final RestClient restClient;
 
     @Value("${public.data.api.key}")
@@ -40,10 +43,12 @@ public class TourApiService {
 
     public TourApiService(TourApiEventRepository eventRepository,
                           TourApiEventTranslationRepository translationRepository,
-                          TourApiEventImageRepository imageRepository) {
+                          TourApiEventImageRepository imageRepository,
+                          GoogleTranslationService translationService) {
         this.eventRepository = eventRepository;
         this.translationRepository = translationRepository;
         this.imageRepository = imageRepository;
+        this.translationService = translationService;
         this.restClient = RestClient.builder().baseUrl(PUBLIC_DATA_API_URL).build();
     }
 
@@ -53,21 +58,205 @@ public class TourApiService {
      *
      * @param lang 수집할 언어 설정
      */
-    @Transactional
     public void syncFestivals(TourLanguage lang) {
         log.info("서울 축제/행사 정보 전체 sync 시작, language: {}", lang);
 
         TourApiResponseDto<TourApiEventItemDto> response = fetchFestivalsFromApi(lang);
 
-        if (response == null || response.getResponse().getBody().getItems() == null) {
+        if (response != null && response.getResponse().getBody().getItems() != null) {
+            List<TourApiEventItemDto> items = response.getResponse().getBody().getItems().getItem();
+            int successCount = 0;
+            int failCount = 0;
+
+            for (TourApiEventItemDto item : items) {
+                try {
+                    processSingleItem(item, lang);
+                    successCount++;
+                } catch (Exception e) {
+                    failCount++;
+                    log.error("[Sync Failed] contentId: {}, title: {}, error: {}",
+                            item.getContentId(), item.getTitle(), e.getMessage());
+                }
+            }
+            log.info("Sync finished for {}. Success: {}, Fail: {}", lang, successCount, failCount);
+        } else {
             log.warn("Tour Api 조회 결과, 데이터가 비어있습니다. language: {}", lang);
+        }
+    }
+
+    /**
+     * 특정 언어에 대한 서울 지역 축제/행사 정보를 제한된 개수만큼 동기화합니다. (테스트 및 운영용)
+     *
+     * @param lang 수집할 언어 설정
+     * @param limit 가져올 아이템 개수 제한
+     */
+    public void syncFestivalsLimited(TourLanguage lang, int limit) {
+        log.info("서울 축제/행사 정보 제한 sync 시작, language: {}, limit: {}", lang, limit);
+
+        TourApiResponseDto<TourApiEventItemDto> response = fetchFestivalsFromApi(lang);
+
+        if (response != null && response.getResponse().getBody().getItems() != null) {
+            List<TourApiEventItemDto> items = response.getResponse().getBody().getItems().getItem();
+            List<TourApiEventItemDto> limitedItems = items.stream().limit(limit).toList();
+
+            int successCount = 0;
+            int failCount = 0;
+
+            for (TourApiEventItemDto item : limitedItems) {
+                try {
+                    processSingleItem(item, lang);
+                    successCount++;
+                } catch (Exception e) {
+                    failCount++;
+                    log.error("[Sync Failed] contentId: {}, title: {}, error: {}",
+                            item.getContentId(), item.getTitle(), e.getMessage());
+                }
+            }
+            log.info("Limited Sync finished for {}. Success: {}, Fail: {}", lang, successCount, failCount);
+        } else {
+            log.warn("Tour Api 조회 결과, 데이터가 비어있습니다. language: {}", lang);
+        }
+    }
+
+    /**
+     * 개별 아이템에 대한 동기화 로직을 수행합니다.
+     */
+    @Transactional
+    public void processSingleItem(TourApiEventItemDto dto, TourLanguage lang) {
+        // 1. 기존 데이터 존재 여부 확인 및 수정 일시 비교
+        TourApiEvent existingEvent = eventRepository.findById(dto.getContentId()).orElse(null);
+
+        // 이미 존재하고, API의 수정시간이 DB의 수정시간과 같다면 상세정보 조회를 건너뜀
+        if (existingEvent != null && Objects.equals(dto.getModifiedTime(), existingEvent.getModifiedTime())) {
+            // 단, 해당 언어의 번역본이 아예 없는 경우는 상세정보를 가져와야 함 (목록 정보만으로는 부족)
+            boolean hasTranslation = translationRepository.existsByEventAndLanguage(existingEvent, lang);
+            if (hasTranslation) {
+                log.info("[Sync Skip] 변경사항 없음: contentId={}, lang={}", dto.getContentId(), lang);
+                return;
+            }
+        }
+
+        // 2. 공통 부분 정보 처리(upsert)
+        TourApiEvent event = existingEvent != null ? existingEvent :
+                TourApiEvent.builder().contentId(dto.getContentId()).build();
+        updateEventEntity(event, dto);
+        TourApiEvent managedEvent = eventRepository.save(event);
+
+        // 3. 번역본 처리(upsert)
+        TourApiEventTranslation translation = translationRepository.findByEventAndLanguage(managedEvent, lang)
+                .orElseGet(() -> TourApiEventTranslation.builder()
+                        .event(managedEvent)
+                        .language(lang)
+                        .build());
+
+        translation.setTitle(dto.getTitle());
+        translation.setAddress(dto.getAddr1() + (dto.getAddr2() != null ? " " + dto.getAddr2() : ""));
+
+        // 공식 API에서 가져온 정보임을 명시
+        translation.setIsAutoTranslated(false);
+        translation.setLastTranslatedModifiedTime(dto.getModifiedTime());
+
+        // 4. 상세 정보 동기화 (상세 설명, 축제 정보, 이미지 등 추가 API 호출)
+        syncDetails(managedEvent, translation, lang);
+
+        // 5. 저장
+        translationRepository.save(translation);
+    }
+
+    /**
+     * 공식 API에서 제공하지 않는 행사들에 대해 국문 데이터를 기반으로 자동 번역을 수행합니다.
+     */
+    private void processMissingTranslations(TourLanguage targetLang, int limit) {
+        List<TourApiEvent> needingTranslation = eventRepository.findEventsNeedingTranslation(targetLang);
+        log.info("[Auto Translation] 누락/만료된 번역 대상 갯수: {} (Language: {})", needingTranslation.size(), targetLang);
+
+        // 제한된 개수만큼만 처리
+        List<TourApiEvent> limitedList = needingTranslation.stream().limit(limit).toList();
+
+        for (TourApiEvent event : limitedList) {
+            try {
+                translateAndSaveEvent(event, targetLang);
+            } catch (Exception e) {
+                log.error("[Auto Translation Error] contentId: {} 번역 중 에러 발생: {}", event.getContentId(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 국문 정보를 가져와서 대상 언어로 번역 후 저장합니다.
+     */
+    private void translateAndSaveEvent(TourApiEvent event, TourLanguage targetLang) {
+        // 국문 번역본 조회 (기준 데이터)
+        TourApiEventTranslation kor = translationRepository.findByEventAndLanguage(event, TourLanguage.KOR)
+                .orElse(null);
+
+        if (kor == null) {
+            log.warn("[Auto Translation] 국문 데이터가 없어 번역을 건너뜁니다. contentId: {}", event.getContentId());
             return;
         }
 
-        List<TourApiEventItemDto> items = response.getResponse().getBody().getItems().getItem();
-        processItems(items, lang);
+        TourApiEventTranslation target = translationRepository.findByEventAndLanguage(event, targetLang)
+                .orElseGet(() -> TourApiEventTranslation.builder()
+                        .event(event)
+                        .language(targetLang)
+                        .build());
 
-        log.info("Successfully synced {} items for language: {}", items.size(), lang);
+        String sourceCode = TourLanguage.KOR.getGoogleLangCode();
+        String targetCode = targetLang.getGoogleLangCode();
+
+        log.info("[Auto Translation] 번역 시작: contentId={}, {} -> {}", event.getContentId(), sourceCode, targetCode);
+
+        // 1. 번역할 필드들을 리스트로 구성
+        List<String> sourceTexts = List.of(
+                nullToEmpty(kor.getTitle()),
+                nullToEmpty(kor.getAddress()),
+                nullToEmpty(kor.getOverview()),
+                nullToEmpty(kor.getEventPlace()),
+                nullToEmpty(kor.getProgram()),
+                nullToEmpty(kor.getSubEvent()),
+                nullToEmpty(kor.getUseTimeFestival())
+        );
+
+        // 2. 한 번의 호출로 배치 번역 수행
+        List<String> translatedTexts = translationService.translateBatch(sourceTexts, sourceCode, targetCode);
+
+        // 3. 결과 매핑 (결과가 비어있지 않고 원본과 갯수가 맞을 경우)
+        if (translatedTexts.size() == sourceTexts.size()) {
+            target.setTitle(translatedTexts.get(0));
+            target.setAddress(translatedTexts.get(1));
+            target.setOverview(translatedTexts.get(2));
+            target.setEventPlace(translatedTexts.get(3));
+            target.setProgram(translatedTexts.get(4));
+            target.setSubEvent(translatedTexts.get(5));
+            target.setUseTimeFestival(translatedTexts.get(6));
+        } else {
+            log.error("[Auto Translation Error] 번역 결과가 누락되었습니다. 개별 번역으로 시도하거나 건너뜁니다. contentId: {}", event.getContentId());
+            return;
+        }
+
+        // 단순 정보는 복사 (이미 번역된 것이 아님)
+        target.setHomepage(kor.getHomepage());
+        target.setTelName(kor.getTelName());
+        target.setPlayTime(kor.getPlayTime());
+        target.setAgeLimit(kor.getAgeLimit());
+        target.setBookingPlace(kor.getBookingPlace());
+        target.setDiscountInfoFestival(kor.getDiscountInfoFestival());
+        target.setSpendTimeFestival(kor.getSpendTimeFestival());
+        target.setFestivalGrade(kor.getFestivalGrade());
+        target.setSponsor1(kor.getSponsor1());
+        target.setSponsor1tel(kor.getSponsor1tel());
+        target.setSponsor2(kor.getSponsor2());
+        target.setSponsor2tel(kor.getSponsor2tel());
+
+        // 메타 데이터 설정
+        target.setIsAutoTranslated(true);
+        target.setLastTranslatedModifiedTime(event.getModifiedTime());
+
+        translationRepository.save(target);
+    }
+
+    private String nullToEmpty(String str) {
+        return str == null ? "" : str;
     }
 
     /**
@@ -80,52 +269,18 @@ public class TourApiService {
         log.info("서울 축제/행사 정보 단건 sync 테스트 시작, language: {}", lang);
 
         TourApiResponseDto<TourApiEventItemDto> response = fetchFestivalsFromApi(lang);
-        if (response != null && response.getResponse().getBody() != null) {
-            log.info("syncOneFestival Response 갯수: {}", response.getResponse().getBody().getTotalCount());
-        }
-
-        if (response == null || response.getResponse().getBody().getItems() == null) {
+        if (response == null || response.getResponse().getBody().getItems() == null || response.getResponse().getBody().getItems().getItem().isEmpty()) {
             log.warn("조회된 데이터가 없습니다.");
             return;
         }
 
-        List<TourApiEventItemDto> items = response.getResponse().getBody().getItems().getItem();
-        if (!items.isEmpty()) {
-            processItems(List.of(items.get(0)), lang);
-            log.info("단건 동기화 완료: {}", items.get(0).getTitle());
-        }
-    }
-
-    /**
-     * API로부터 받은 목록 아이템들을 순회하며 DB에 저장 및 상세 정보를 갱신합니다.
-     */
-    private void processItems(List<TourApiEventItemDto> items, TourLanguage lang) {
-        for (TourApiEventItemDto dto : items) {
-            try {
-                // 공통 부분 정보 처리(upsert)
-                TourApiEvent event = eventRepository.findById(dto.getContentId()).orElseGet(
-                        () -> TourApiEvent.builder().contentId(dto.getContentId()).build());
-                updateEventEntity(event, dto);
-                TourApiEvent managedEvent = eventRepository.save(event); // JPA 관리하도록 새로운 변수에 할당
-
-                // 번역본 처리(upsert)
-                TourApiEventTranslation translation = translationRepository.findByEventAndLanguage(managedEvent, lang)
-                        .orElseGet(
-                                () -> TourApiEventTranslation.builder().event(managedEvent).language(lang).build());
-
-                translation.setTitle(dto.getTitle());
-                translation.setAddress(dto.getAddr1() + (dto.getAddr2() != null ? " " + dto.getAddr2() : ""));
-
-                // 상세 정보 동기화 (상세 설명, 축제 정보, 이미지 등 추가 API 호출)
-                syncDetails(managedEvent, translation, lang);
-
-                // 변경된 상세 정보 및 이미지 컬렉션 저장
-                translationRepository.save(translation);
-            } catch (Exception e) {
-                log.error("[Sync Error] contentId: {} 처리 중 에러 발생. 다음 아이템으로 넘어갑니다. 에러: {}",
-                        dto.getContentId(), e.getMessage());
-                // 루프가 멈추지 않도록 예외를 삼키고 다음 아이템 진행
-            }
+        TourApiEventItemDto item = response.getResponse().getBody().getItems().getItem().get(0);
+        try {
+            processSingleItem(item, lang);
+            log.info("단건 동기화 완료: {}", item.getTitle());
+        } catch (Exception e) {
+            log.error("[Sync One Failed] contentId: {}, title: {}, error: {}",
+                    item.getContentId(), item.getTitle(), e.getMessage());
         }
     }
 
@@ -135,13 +290,11 @@ public class TourApiService {
     private void syncDetails(TourApiEvent event, TourApiEventTranslation translation, TourLanguage lang) {
         Long contentId = event.getContentId();
         Long contentTypeId = event.getContentTypeId();
-        log.info("[Detail Sync] 시작 - contentId: {}, contentTypeId: {}", contentId, contentTypeId);
+        log.info("[Detail Sync] 시작 - contentId: {}, contentTypeId: {}, lang: {}", contentId, contentTypeId, lang);
 
         // 1. 공통 정보 조회 (개요, 홈페이지, 전화번호 명칭 등)
         TourApiDetailCommonItemDto commonDto = fetchDetailCommon(contentId, lang);
         if (commonDto != null) {
-            log.info("[Detail Sync] 공통 정보 수집 완료 (overview 길이: {})",
-                    commonDto.getOverview() != null ? commonDto.getOverview().length() : 0);
             translation.setOverview(commonDto.getOverview());
             translation.setHomepage(commonDto.getHomepage());
             translation.setTelName(commonDto.getTelName());
@@ -150,7 +303,6 @@ public class TourApiService {
         // 2. 소개 정보 조회 (축제 전용 상세 정보: 장소, 시간, 요금, 주최자 등)
         TourApiDetailIntroItemDto introDto = fetchDetailIntro(contentId, contentTypeId, lang);
         if (introDto != null) {
-            log.info("[Detail Sync] 소개 정보 수집 완료 (eventPlace: {})", introDto.getEventPlace());
             translation.setEventPlace(introDto.getEventPlace());
             translation.setPlayTime(introDto.getPlayTime());
             translation.setUseTimeFestival(introDto.getUseTimeFestival());
@@ -167,20 +319,22 @@ public class TourApiService {
             translation.setSponsor2tel(introDto.getSponsor2tel());
         }
 
-        // 3. 이미지 정보 조회 (갤러리 추가 이미지)
-        List<TourApiDetailImageItemDto> imageDtos = fetchDetailImages(contentId, lang);
-        if (imageDtos != null && !imageDtos.isEmpty()) {
-            log.info("[Detail Sync] 이미지 정보 수집 완료 (이미지 개수: {})", imageDtos.size());
-            // 기존 이미지 제거 후 최신 정보로 갱신 (orphanRemoval에 의해 DB 자동 반영)
-            event.getImages().clear();
-            for (TourApiDetailImageItemDto imgDto : imageDtos) {
-                TourApiEventImage image = TourApiEventImage.builder()
-                        .event(event)
-                        .originImgUrl(imgDto.getOriginImgUrl())
-                        .smallImgUrl(imgDto.getSmallImgUrl())
-                        .copyrightType(imgDto.getCopyrightType())
-                        .build();
-                event.getImages().add(image);
+        // 3. 이미지 정보 조회 (KOR 일 때만 업데이트하여 데이터 유실 방지)
+        // 국문 데이터가 가장 풍부하므로 국문 동기화 시에만 이미지 갱신을 수행합니다.
+        if (lang == TourLanguage.KOR) {
+            List<TourApiDetailImageItemDto> imageDtos = fetchDetailImages(contentId, lang);
+            if (imageDtos != null && !imageDtos.isEmpty()) {
+                log.info("[Detail Sync] 이미지 정보 갱신 (이미지 개수: {})", imageDtos.size());
+                event.getImages().clear();
+                for (TourApiDetailImageItemDto imgDto : imageDtos) {
+                    TourApiEventImage image = TourApiEventImage.builder()
+                            .event(event)
+                            .originImgUrl(imgDto.getOriginImgUrl())
+                            .smallImgUrl(imgDto.getSmallImgUrl())
+                            .copyrightType(imgDto.getCopyrightType())
+                            .build();
+                    event.getImages().add(image);
+                }
             }
         }
     }
@@ -316,14 +470,13 @@ public class TourApiService {
                         .queryParam("MobileOS", "ETC")
                         .queryParam("MobileApp", "BeyondToursSeoul")
                         .queryParam("_type", "json")
+                        .queryParam("numOfRows", 100)
                         .queryParam("eventStartDate", today)
                         .queryParam("lDongRegnCd", "11") // 서울 법정동 코드
-                        .queryParam("numOfRows", 50)
                         .build())
                 .retrieve().body(new ParameterizedTypeReference<TourApiResponseDto<TourApiEventItemDto>>() {
                 });
     }
-
     /**
      * 엔티티의 공통 정보(ID, 이미지, 좌표 등)를 DTO 기반으로 갱신합니다.
      */

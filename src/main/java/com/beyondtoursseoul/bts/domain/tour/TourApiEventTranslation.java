@@ -89,4 +89,7 @@ public class TourApiEventTranslation {
     @Column(name = "is_auto_translated")
     @Builder.Default
     private Boolean isAutoTranslated = false; // [추가] 구글 번역기를 통한 자동 번역 여부
+
+    @Column(name = "last_translated_modified_time")
+    private String lastTranslatedModifiedTime; // [추가] 번역 당시의 원본 수정 일시
 }

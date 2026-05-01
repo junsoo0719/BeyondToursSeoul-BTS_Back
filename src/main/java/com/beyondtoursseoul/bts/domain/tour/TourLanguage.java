@@ -4,19 +4,17 @@ import lombok.Getter;
 
 @Getter
 public enum TourLanguage {
-    KOR("KorService2"),
-    ENG("EngService2"),
-    JPN("JpnService2"),
-    CHS("ChsService2"), // 중국어 간체
-    CHT("ChtService2"); // 중국어 번체
-//    GER("GerService2"),
-//    FRE("FreService2"),
-//    SPN("SpnService2"),
-//    RUS("RusService2");
+    KOR("KorService2", "ko"),
+    ENG("EngService2", "en"),
+    JPN("JpnService2", "ja"),
+    CHS("ChsService2", "zh-CN"), // 중국어 간체
+    CHT("ChtService2", "zh-TW"); // 중국어 번체
 
     private final String serviceName;
+    private final String googleLangCode;
 
-    TourLanguage(String serviceName) {
+    TourLanguage(String serviceName, String googleLangCode) {
         this.serviceName = serviceName;
+        this.googleLangCode = googleLangCode;
     }
 }

@@ -13,4 +13,6 @@ public interface TourApiEventTranslationRepository extends JpaRepository<TourApi
 
     // 특정 행사, 언어에 해당하는 번역 데이터가 있는지 확인
     Optional<TourApiEventTranslation> findByEventAndLanguage(TourApiEvent event, TourLanguage language);
+
+    boolean existsByEventAndLanguage(TourApiEvent event, TourLanguage language);
 }
