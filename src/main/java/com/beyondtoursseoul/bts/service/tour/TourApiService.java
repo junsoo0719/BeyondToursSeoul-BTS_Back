@@ -5,16 +5,17 @@ import com.beyondtoursseoul.bts.domain.tour.TourApiEventImage;
 import com.beyondtoursseoul.bts.domain.tour.TourApiEventTranslation;
 import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.tour.*;
-import com.beyondtoursseoul.bts.repository.tour.TourApiEventImageRepository;
 import com.beyondtoursseoul.bts.repository.tour.TourApiEventRepository;
 import com.beyondtoursseoul.bts.repository.tour.TourApiEventTranslationRepository;
 import com.beyondtoursseoul.bts.service.translation.GoogleTranslationService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.converter.HttpMessageConversionException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -31,7 +32,6 @@ public class TourApiService {
 
     private final TourApiEventRepository eventRepository;
     private final TourApiEventTranslationRepository translationRepository;
-    private final TourApiEventImageRepository imageRepository;
     private final GoogleTranslationService translationService;
     private final RestClient restClient;
 
@@ -43,11 +43,9 @@ public class TourApiService {
 
     public TourApiService(TourApiEventRepository eventRepository,
                           TourApiEventTranslationRepository translationRepository,
-                          TourApiEventImageRepository imageRepository,
                           GoogleTranslationService translationService) {
         this.eventRepository = eventRepository;
         this.translationRepository = translationRepository;
-        this.imageRepository = imageRepository;
         this.translationService = translationService;
         this.restClient = RestClient.builder().baseUrl(PUBLIC_DATA_API_URL).build();
     }
@@ -58,6 +56,7 @@ public class TourApiService {
      *
      * @param lang 수집할 언어 설정
      */
+    @Transactional
     public void syncFestivals(TourLanguage lang) {
         log.info("서울 축제/행사 정보 전체 sync 시작, language: {}", lang);
 
@@ -76,52 +75,22 @@ public class TourApiService {
                     failCount++;
                     log.error("[Sync Failed] contentId: {}, title: {}, error: {}",
                             item.getContentId(), item.getTitle(), e.getMessage());
+                    throw e; // 하나라도 실패하면 전체 롤백을 위해 예외를 다시 던짐
                 }
             }
             log.info("Sync finished for {}. Success: {}, Fail: {}", lang, successCount, failCount);
         } else {
             log.warn("Tour Api 조회 결과, 데이터가 비어있습니다. language: {}", lang);
         }
-    }
-
-    /**
-     * 특정 언어에 대한 서울 지역 축제/행사 정보를 제한된 개수만큼 동기화합니다. (테스트 및 운영용)
-     *
-     * @param lang 수집할 언어 설정
-     * @param limit 가져올 아이템 개수 제한
-     */
-    public void syncFestivalsLimited(TourLanguage lang, int limit) {
-        log.info("서울 축제/행사 정보 제한 sync 시작, language: {}, limit: {}", lang, limit);
-
-        TourApiResponseDto<TourApiEventItemDto> response = fetchFestivalsFromApi(lang);
-
-        if (response != null && response.getResponse().getBody().getItems() != null) {
-            List<TourApiEventItemDto> items = response.getResponse().getBody().getItems().getItem();
-            List<TourApiEventItemDto> limitedItems = items.stream().limit(limit).toList();
-
-            int successCount = 0;
-            int failCount = 0;
-
-            for (TourApiEventItemDto item : limitedItems) {
-                try {
-                    processSingleItem(item, lang);
-                    successCount++;
-                } catch (Exception e) {
-                    failCount++;
-                    log.error("[Sync Failed] contentId: {}, title: {}, error: {}",
-                            item.getContentId(), item.getTitle(), e.getMessage());
-                }
-            }
-            log.info("Limited Sync finished for {}. Success: {}, Fail: {}", lang, successCount, failCount);
-        } else {
-            log.warn("Tour Api 조회 결과, 데이터가 비어있습니다. language: {}", lang);
+        if (lang != TourLanguage.KOR) {
+            processMissingTranslations(lang);
         }
+
     }
 
     /**
      * 개별 아이템에 대한 동기화 로직을 수행합니다.
      */
-    @Transactional
     public void processSingleItem(TourApiEventItemDto dto, TourLanguage lang) {
         // 1. 기존 데이터 존재 여부 확인 및 수정 일시 비교
         TourApiEvent existingEvent = eventRepository.findById(dto.getContentId()).orElse(null);
@@ -166,14 +135,14 @@ public class TourApiService {
     /**
      * 공식 API에서 제공하지 않는 행사들에 대해 국문 데이터를 기반으로 자동 번역을 수행합니다.
      */
-    private void processMissingTranslations(TourLanguage targetLang, int limit) {
+    private void processMissingTranslations(TourLanguage targetLang) {
         List<TourApiEvent> needingTranslation = eventRepository.findEventsNeedingTranslation(targetLang);
         log.info("[Auto Translation] 누락/만료된 번역 대상 갯수: {} (Language: {})", needingTranslation.size(), targetLang);
 
         // 제한된 개수만큼만 처리
-        List<TourApiEvent> limitedList = needingTranslation.stream().limit(limit).toList();
+        List<TourApiEvent> targetList = needingTranslation.stream().toList();
 
-        for (TourApiEvent event : limitedList) {
+        for (TourApiEvent event : targetList) {
             try {
                 translateAndSaveEvent(event, targetLang);
             } catch (Exception e) {
@@ -269,7 +238,11 @@ public class TourApiService {
         log.info("서울 축제/행사 정보 단건 sync 테스트 시작, language: {}", lang);
 
         TourApiResponseDto<TourApiEventItemDto> response = fetchFestivalsFromApi(lang);
-        if (response == null || response.getResponse().getBody().getItems() == null || response.getResponse().getBody().getItems().getItem().isEmpty()) {
+        if (response == null || response.getResponse().getBody().getItems() == null || response.getResponse()
+                .getBody()
+                .getItems()
+                .getItem()
+                .isEmpty()) {
             log.warn("조회된 데이터가 없습니다.");
             return;
         }
@@ -435,9 +408,10 @@ public class TourApiService {
                 return response.getResponse().getBody().getItems().getItem();
             }
 
-        } catch (org.springframework.http.converter.HttpMessageConversionException e) {
+        } catch (HttpMessageConversionException | RestClientException e) {
             // Tour API 특성상 이미지가 없으면 "items": "" 형태로 응답하여 파싱 에러가 발생함
             log.warn("[API Warn] 상세 이미지가 없습니다 (파싱 에러 처리). contentId: {}", contentId);
+            log.warn("[API Warn] 에러메시지: {}", e.getMessage());
             return List.of(); // 빈 리스트를 반환하여 로직이 계속 진행되도록 함
 
         } catch (Exception e) {
@@ -477,6 +451,7 @@ public class TourApiService {
                 .retrieve().body(new ParameterizedTypeReference<TourApiResponseDto<TourApiEventItemDto>>() {
                 });
     }
+
     /**
      * 엔티티의 공통 정보(ID, 이미지, 좌표 등)를 DTO 기반으로 갱신합니다.
      */
