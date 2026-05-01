@@ -10,7 +10,7 @@ import java.util.List;
 @Getter
 @NoArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class TourApiResponseDto {
+public class CategoryCodeResponseDto {
 
     @JsonProperty("response")
     private Response response;
@@ -19,7 +19,6 @@ public class TourApiResponseDto {
     @NoArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Response {
-
         @JsonProperty("body")
         private Body body;
     }
@@ -28,25 +27,14 @@ public class TourApiResponseDto {
     @NoArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Body {
-
         @JsonProperty("items")
         private Items items;
-
-        @JsonProperty("totalCount")
-        private int totalCount;
-
-        @JsonProperty("numOfRows")
-        private int numOfRows;
-
-        @JsonProperty("pageNo")
-        private int pageNo;
     }
 
     @Getter
     @NoArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Items {
-
         @JsonProperty("item")
         private List<Item> item;
     }
@@ -55,38 +43,10 @@ public class TourApiResponseDto {
     @NoArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Item {
+        @JsonProperty("code")
+        private String code;
 
-        @JsonProperty("contentid")
-        private String contentId;
-
-        @JsonProperty("title")
-        private String title;
-
-        @JsonProperty("contenttypeid")
-        private String contentTypeId;
-
-        @JsonProperty("addr1")
-        private String addr1;
-
-        @JsonProperty("mapx")
-        private String mapX;
-
-        @JsonProperty("mapy")
-        private String mapY;
-
-        @JsonProperty("firstimage")
-        private String firstImage;
-
-        @JsonProperty("lclsSystm1")
-        private String cat1;
-
-        @JsonProperty("lclsSystm2")
-        private String cat2;
-
-        @JsonProperty("lclsSystm3")
-        private String cat3;
-
-        @JsonProperty("tel")
-        private String tel;
+        @JsonProperty("name")
+        private String name;
     }
 }
