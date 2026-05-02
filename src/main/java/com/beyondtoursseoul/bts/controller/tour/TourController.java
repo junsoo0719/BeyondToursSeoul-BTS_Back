@@ -3,12 +3,15 @@ package com.beyondtoursseoul.bts.controller.tour;
 import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.tour.TourApiEventItemDto;
 import com.beyondtoursseoul.bts.dto.tour.TourApiResponseDto;
+import com.beyondtoursseoul.bts.dto.tour.TourEventSummaryResponse;
 import com.beyondtoursseoul.bts.service.tour.TourApiService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @Tag(name = "Tour API", description = "관광공사 데이터 연동 및 조회 API")
 @RestController
@@ -17,6 +20,28 @@ import org.springframework.web.bind.annotation.*;
 public class TourController {
 
     private final TourApiService tourApiService;
+    private final com.beyondtoursseoul.bts.service.tour.TourQueryService tourQueryService;
+
+    /**
+     * 문화행사 리스트 조회
+     */
+    @Operation(summary = "문화행사 리스트 조회", description = "특정 언어에 맞는 문화행사 목록을 조회합니다. 해당 언어 데이터가 없으면 국문(KOR) 데이터를 반환합니다.")
+    @GetMapping("/events")
+    public ResponseEntity<List<TourEventSummaryResponse>> getEvents(
+            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
+        return ResponseEntity.ok(tourQueryService.getEventList(lang));
+    }
+
+    /**
+     * 문화행사 상세 조회
+     */
+    @Operation(summary = "문화행사 상세 조회", description = "특정 문화행사의 상세 정보를 조회합니다.")
+    @GetMapping("/events/{contentId}")
+    public ResponseEntity<com.beyondtoursseoul.bts.dto.tour.TourEventDetailResponse> getEventDetail(
+            @PathVariable Long contentId,
+            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
+        return ResponseEntity.ok(tourQueryService.getEventDetail(contentId, lang));
+    }
 
     /**
      * 1. API 호출 결과 DTO로 즉시 확인 (DB 저장 X)
