@@ -16,7 +16,7 @@ public interface AttractionLocalScoreRepository extends JpaRepository<Attraction
     @Query("SELECT MAX(a.id.date) FROM AttractionLocalScore a")
     Optional<LocalDate> findLatestDate();
 
-    List<AttractionLocalScore> findByIdAttractionId(Long attractionId);
+    List<AttractionLocalScore> findByIdAttractionIdAndIdDate(Long attractionId, LocalDate date);
 
     List<AttractionLocalScore> findByIdDateAndIdTimeSlot(LocalDate date, String timeSlot);
 }

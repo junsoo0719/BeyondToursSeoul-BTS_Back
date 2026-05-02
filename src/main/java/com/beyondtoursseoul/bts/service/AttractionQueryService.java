@@ -72,7 +72,8 @@ public class AttractionQueryService {
                 .stream()
                 .collect(Collectors.toMap(c -> c.getCode(), c -> c.getName()));
 
-        Map<String, BigDecimal> scores = scoreRepository.findByIdAttractionId(id)
+        LocalDate latestDate = scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
+        Map<String, BigDecimal> scores = scoreRepository.findByIdAttractionIdAndIdDate(id, latestDate)
                 .stream()
                 .collect(Collectors.toMap(
                         s -> s.getId().getTimeSlot(),
