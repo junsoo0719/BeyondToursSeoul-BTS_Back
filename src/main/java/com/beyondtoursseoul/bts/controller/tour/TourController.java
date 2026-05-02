@@ -3,9 +3,11 @@ package com.beyondtoursseoul.bts.controller.tour;
 import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.tour.TourApiEventItemDto;
 import com.beyondtoursseoul.bts.dto.tour.TourApiResponseDto;
+import com.beyondtoursseoul.bts.dto.tour.TourEventDetailResponse;
 import com.beyondtoursseoul.bts.dto.tour.TourEventSummaryResponse;
 import com.beyondtoursseoul.bts.service.tour.TourApiService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -28,6 +30,7 @@ public class TourController {
     @Operation(summary = "문화행사 리스트 조회", description = "특정 언어에 맞는 문화행사 목록을 조회합니다. 해당 언어 데이터가 없으면 국문(KOR) 데이터를 반환합니다.")
     @GetMapping("/events")
     public ResponseEntity<List<TourEventSummaryResponse>> getEvents(
+            @Parameter(description = "언어 코드 (KOR, ENG, JPN, CHS, CHT)", example = "KOR")
             @RequestParam(defaultValue = "KOR") TourLanguage lang) {
         return ResponseEntity.ok(tourQueryService.getEventList(lang));
     }
@@ -37,8 +40,10 @@ public class TourController {
      */
     @Operation(summary = "문화행사 상세 조회", description = "특정 문화행사의 상세 정보를 조회합니다.")
     @GetMapping("/events/{contentId}")
-    public ResponseEntity<com.beyondtoursseoul.bts.dto.tour.TourEventDetailResponse> getEventDetail(
+    public ResponseEntity<TourEventDetailResponse> getEventDetail(
+            @Parameter(description = "콘텐츠 고유 ID", example = "3114696")
             @PathVariable Long contentId,
+            @Parameter(description = "언어 코드 (KOR, ENG, JPN, CHS, CHT)", example = "KOR")
             @RequestParam(defaultValue = "KOR") TourLanguage lang) {
         return ResponseEntity.ok(tourQueryService.getEventDetail(contentId, lang));
     }
@@ -49,6 +54,7 @@ public class TourController {
     @Operation(summary = "관광공사 API 원본 데이터 확인", description = "DB에 저장하지 않고 API 결과만 DTO로 반환합니다.")
     @GetMapping("/test/fetch")
     public ResponseEntity<TourApiResponseDto<TourApiEventItemDto>> fetchTest(
+            @Parameter(description = "수집할 언어 설정", example = "KOR")
             @RequestParam(defaultValue = "KOR") TourLanguage lang) {
 
         TourApiResponseDto<TourApiEventItemDto> result = tourApiService.getRawFestivals(lang);
@@ -61,6 +67,7 @@ public class TourController {
     @Operation(summary = "관광공사 데이터 DB 전체 동기화 실행", description = "API 데이터를 긁어와서 우리 DB에 전체 저장/업데이트합니다.")
     @GetMapping("/test/sync-all")
     public ResponseEntity<String> syncAllTest(
+            @Parameter(description = "수집할 언어 설정", example = "KOR")
             @RequestParam(defaultValue = "KOR") TourLanguage lang) {
 
         try {
@@ -77,6 +84,7 @@ public class TourController {
     @Operation(summary = "관광공사 데이터 DB 단건 동기화 실행", description = "API 데이터 중 첫 번째 한 건만 상세 정보(개요, 장소, 요금, 이미지 등)를 포함하여 저장합니다.")
     @GetMapping("/test/sync-one")
     public ResponseEntity<String> syncOneTest(
+            @Parameter(description = "수집할 언어 설정", example = "KOR")
             @RequestParam(defaultValue = "KOR") TourLanguage lang) {
 
         try {

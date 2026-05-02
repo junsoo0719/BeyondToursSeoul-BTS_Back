@@ -2,7 +2,10 @@ package com.beyondtoursseoul.bts.service.locker;
 
 import com.beyondtoursseoul.bts.domain.locker.Locker;
 import com.beyondtoursseoul.bts.domain.locker.LockerTranslation;
+import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.locker.LockerApiResponseDto;
+import com.beyondtoursseoul.bts.dto.locker.LockerDetailResponse;
+import com.beyondtoursseoul.bts.dto.locker.LockerSummaryResponse;
 import com.beyondtoursseoul.bts.repository.locker.LockerRepository;
 import com.beyondtoursseoul.bts.service.translation.LockerTranslationService;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +18,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * 물품보관함 서비스 클래스
@@ -39,6 +44,51 @@ public class LockerService {
         this.lockerTranslationService = lockerTranslationService;
     }
 
+    /**
+     * 특정 언어에 맞는 물품보관함 리스트를 조회합니다. (지도/핀용)
+     */
+    @Transactional(readOnly = true)
+    public List<LockerSummaryResponse> getLockerList(TourLanguage lang) {
+        String langCode = lang.getLockerLangCode();
+        return lockerRepository.findAll().stream()
+                .map(locker -> {
+                    LockerTranslation translation = findTranslation(locker, langCode);
+                    return translation != null ? new LockerSummaryResponse(locker, translation) : null;
+                })
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 특정 언어에 맞는 물품보관함 상세 정보를 조회합니다.
+     */
+    @Transactional(readOnly = true)
+    public LockerDetailResponse getLockerDetail(Long id, TourLanguage lang) {
+        Locker locker = lockerRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 보관함입니다. ID: " + id));
+
+        String langCode = lang.getLockerLangCode();
+        LockerTranslation translation = findTranslation(locker, langCode);
+
+        if (translation == null) {
+            throw new IllegalStateException("해당 보관함의 번역 데이터가 존재하지 않습니다.");
+        }
+
+        return new LockerDetailResponse(locker, translation);
+    }
+
+    /**
+     * 보관함에서 특정 언어의 번역본을 찾고, 없으면 한국어('ko')를 반환합니다.
+     */
+    private LockerTranslation findTranslation(Locker locker, String langCode) {
+        return locker.getTranslations().stream()
+                .filter(t -> langCode.equals(t.getLanguageCode()))
+                .findFirst()
+                .orElseGet(() -> locker.getTranslations().stream()
+                        .filter(t -> "ko".equals(t.getLanguageCode()))
+                        .findFirst()
+                        .orElse(null));
+    }
 
     /**
      * 물품보관함 api 호출 및 DTO 변환

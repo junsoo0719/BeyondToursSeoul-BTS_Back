@@ -1,29 +1,56 @@
 package com.beyondtoursseoul.bts.controller.locker;
 
 import com.beyondtoursseoul.bts.dto.locker.LockerApiResponseDto;
+import com.beyondtoursseoul.bts.dto.locker.LockerDetailResponse;
+import com.beyondtoursseoul.bts.dto.locker.LockerSummaryResponse;
 import com.beyondtoursseoul.bts.service.locker.LockerService;
 import com.beyondtoursseoul.bts.service.translation.LockerTranslationService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
+import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
+import org.springframework.http.ResponseEntity;
+import java.util.List;
+
+@Tag(name = "Locker", description = "서울시 물품보관함 데이터 관리 및 조회 API")
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/lockers")
 @RequiredArgsConstructor
-@Tag(name = "Locker", description = "서울시 물품보관함 데이터 관리 및 동기화 API")
 public class LockerController {
 
     private final LockerService lockerService;
     private final LockerTranslationService lockerTranslationService;
 
+    /**
+     * 물품보관함 리스트 조회 (지도용)
+     */
+    @Operation(summary = "물품보관함 리스트 조회", description = "지도에 표시할 물품보관함 목록을 조회합니다. 언어별 번역을 제공하며, 없으면 한국어로 대체됩니다.")
+    @GetMapping
+    public ResponseEntity<List<LockerSummaryResponse>> getLockers(
+            @Parameter(description = "언어 설정 (KOR, ENG, JPN, CHS, CHT)", example = "KOR")
+            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
+        return ResponseEntity.ok(lockerService.getLockerList(lang));
+    }
+
+    /**
+     * 물품보관함 상세 조회
+     */
+    @Operation(summary = "물품보관함 상세 조회", description = "특정 물품보관함의 상세 정보를 조회합니다.")
+    @GetMapping("/{id}")
+    public ResponseEntity<LockerDetailResponse> getLockerDetail(
+            @Parameter(description = "물품보관함 시스템 ID (PK)", example = "1")
+            @PathVariable Long id,
+            @Parameter(description = "언어 설정 (KOR, ENG, JPN, CHS, CHT)", example = "KOR")
+            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
+        return ResponseEntity.ok(lockerService.getLockerDetail(id, lang));
+    }
 
     /// 물품보관함 데이터 호출 api
     @Operation(
@@ -33,8 +60,8 @@ public class LockerController {
             @ApiResponse(responseCode = "200", description = "데이터 호출 성공"),
             @ApiResponse(responseCode = "500", description = "외부 API 통신 오류")})
     @GetMapping("/test")
-    public LockerApiResponseDto testLockerApi() {
-        return lockerService.fetchLockerData();
+    public ResponseEntity<LockerApiResponseDto> testLockerApi() {
+        return ResponseEntity.ok(lockerService.fetchLockerData());
     }
 
     /// DB에 물품보관함 데이터 insert, update 하는 메서드 - 번역 포함 (2주에 한 번 스케쥴링 설정)
@@ -45,10 +72,10 @@ public class LockerController {
             @ApiResponse(responseCode = "200", description = "동기화 성공"),
             @ApiResponse(responseCode = "500", description = "데이터베이스 작업 실패")})
     @PostMapping("/sync")
-    public String syncLockerData() {
+    public ResponseEntity<String> syncLockerData() {
         log.info("컨트롤러 진입");
         lockerService.syncLockerDataToDb();
-        return "데이터 동기화 완료! DB(Supabase)를 확인해보세요.";
+        return ResponseEntity.ok("데이터 동기화 완료! DB(Supabase)를 확인해보세요.");
     }
 
     /// 번역 메서드 (주석)
