@@ -6,6 +6,7 @@ import com.beyondtoursseoul.bts.repository.DongLocalScoreRepository;
 import com.beyondtoursseoul.bts.repository.DongPopulationRawRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,13 +46,16 @@ public class LocalScoreCalculateService {
             return;
         }
 
-        // 과거 4주치 원시 데이터 (stability, repeat 계산용)
         List<DongPopulationRaw> historyList = rawRepository.findByTimeSlotAndDateBetween(
                 slot.getCode(), historyFrom, targetDate);
         Map<String, List<DongPopulationRaw>> historyByDong = historyList.stream()
                 .collect(Collectors.groupingBy(DongPopulationRaw::getDongCode));
 
+        // Task 1: foreign_penalty 선계산 (4주 평균 기반 z-score → sigmoid)
+        Map<String, Double> foreignPenaltyMap = computeForeignPenalty(currentList, historyByDong);
+
         // 행정동별 원시 지표 계산
+        // [0]=local_ratio, [1]=stability, [2]=repeat, [3]=foreign_penalty_sigmoid
         Map<String, double[]> rawMetrics = new LinkedHashMap<>();
         for (DongPopulationRaw current : currentList) {
             String dongCode = current.getDongCode();
@@ -62,38 +66,38 @@ public class LocalScoreCalculateService {
             double total = korean + foreign;
 
             double localRatio     = total > 0 ? korean / total : 0.5;
-            double foreignPenalty = total > 0 ? foreign / total : 0.5;
             double stability      = calculateStability(history);
             double repeat         = calculateRepeat(history);
+            double foreignPenalty = foreignPenaltyMap.getOrDefault(dongCode, 0.5);
 
-            // [0]=local_ratio, [1]=stability, [2]=repeat, [3]=foreign_penalty
             rawMetrics.put(dongCode, new double[]{localRatio, stability, repeat, foreignPenalty});
         }
 
-        // MIN-MAX 정규화 (서울 전체 행정동 기준)
-        double[] mins = {Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE};
-        double[] maxs = {-Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
+        // MIN-MAX 정규화 (인덱스 0~2: localRatio, stability, repeat)
+        // foreignPenalty(인덱스 3)는 sigmoid로 이미 (0,1) 범위 — 직접 사용
+        double[] mins = {Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE};
+        double[] maxs = {-Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
         for (double[] m : rawMetrics.values()) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 3; i++) {
                 if (m[i] < mins[i]) mins[i] = m[i];
                 if (m[i] > maxs[i]) maxs[i] = m[i];
             }
         }
 
-        // 기존 점수 삭제 후 재계산
         scoreRepository.deleteByDateAndTimeSlot(targetDate, slot.getCode());
 
         List<DongLocalScore> scores = new ArrayList<>();
         for (Map.Entry<String, double[]> entry : rawMetrics.entrySet()) {
             double[] m = entry.getValue();
-            double[] norm = new double[4];
-            for (int i = 0; i < 4; i++) {
+            double[] norm = new double[3];
+            for (int i = 0; i < 3; i++) {
                 double range = maxs[i] - mins[i];
                 norm[i] = range > 1e-9 ? (m[i] - mins[i]) / range : 0.0;
             }
 
-            double score = 0.3 * norm[0] + 0.3 * norm[1] + 0.3 * norm[2] - 0.1 * norm[3];
-            score = Math.max(0.0, Math.min(1.0, score));
+            // m[3] = sigmoid(foreignZ): 서울 평균 동이면 0.5, 외국인 많을수록 1에 가까움
+            double score = 0.3 * norm[0] + 0.3 * norm[1] + 0.3 * norm[2] - 0.1 * m[3];
+            score = Math.max(0.0, Math.min(1.0, score / 0.9));
 
             scores.add(DongLocalScore.builder()
                     .dongCode(entry.getKey())
@@ -108,7 +112,36 @@ public class LocalScoreCalculateService {
         log.info("time_slot {} 저장 완료: {}개 행정동", slot.getCode(), scores.size());
     }
 
-    // stability = 1 - |평일평균 - 주말평균| / MAX(평일평균, 주말평균)
+    // Task 1: 동별 4주 평균 외국인 인구 기반 z-score → sigmoid
+    private Map<String, Double> computeForeignPenalty(
+            List<DongPopulationRaw> currentList,
+            Map<String, List<DongPopulationRaw>> historyByDong) {
+
+        Map<String, Double> dongForeignAvg = new LinkedHashMap<>();
+        for (DongPopulationRaw current : currentList) {
+            String dongCode = current.getDongCode();
+            List<DongPopulationRaw> history = historyByDong.getOrDefault(dongCode, List.of(current));
+            double avg = history.stream()
+                    .mapToDouble(r -> r.getForeignPop().doubleValue())
+                    .average().orElse(0.0);
+            dongForeignAvg.put(dongCode, avg);
+        }
+
+        double[] values = dongForeignAvg.values().stream().mapToDouble(v -> v).toArray();
+        double mean = Arrays.stream(values).average().orElse(0.0);
+        double variance = Arrays.stream(values).map(v -> Math.pow(v - mean, 2)).average().orElse(0.0);
+        double stddev = Math.sqrt(variance);
+
+        Map<String, Double> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Double> entry : dongForeignAvg.entrySet()) {
+            double z = stddev > 1e-9 ? (entry.getValue() - mean) / stddev : 0.0;
+            result.put(entry.getKey(), 1.0 / (1.0 + Math.exp(-z)));
+        }
+        return result;
+    }
+
+    // stability = 1 - |평일평균 - 주말평균| / (MAX(평일평균, 주말평균) + 500)
+    // 500: 소규모 동(min ~2,400명)에서 분모 폭발 방지, 중간 이상 동엔 영향 미미
     private double calculateStability(List<DongPopulationRaw> history) {
         List<Double> weekday = new ArrayList<>();
         List<Double> weekend = new ArrayList<>();
@@ -129,23 +162,21 @@ public class LocalScoreCalculateService {
         double weAvg = weekend.stream().mapToDouble(d -> d).average().orElse(0);
         double maxAvg = Math.max(wdAvg, weAvg);
 
-        return maxAvg > 0 ? 1.0 - Math.abs(wdAvg - weAvg) / maxAvg : 1.0;
+        return 1.0 - Math.abs(wdAvg - weAvg) / (maxAvg + 500);
     }
 
-    // repeat = 1 / (1 + 변동계수)  변동계수 = 표준편차 / 평균
+    // Task 3: CV 기반 → IQR/median 기반 (저인구 동의 CV 폭발 문제 해소)
     private double calculateRepeat(List<DongPopulationRaw> history) {
         if (history.size() < 2) return 1.0;
 
-        double[] pops = history.stream()
-                .mapToDouble(r -> r.getKoreanPop().doubleValue())
-                .toArray();
-        double mean = Arrays.stream(pops).average().orElse(0);
-        if (mean < 1e-9) return 1.0;
+        DescriptiveStatistics stats = new DescriptiveStatistics();
+        history.forEach(r -> stats.addValue(r.getKoreanPop().doubleValue()));
 
-        double variance = Arrays.stream(pops).map(p -> Math.pow(p - mean, 2)).average().orElse(0);
-        double cv = Math.sqrt(variance) / mean;
+        double median = stats.getPercentile(50);
+        if (median < 1e-9) return 1.0;
 
-        return 1.0 / (1.0 + cv);
+        double iqr = stats.getPercentile(75) - stats.getPercentile(25);
+        return 1.0 / (1.0 + iqr / median);
     }
 
     private String buildBreakdown(String timeSlot, double[] raw, double[] norm) {
@@ -155,11 +186,10 @@ public class LocalScoreCalculateService {
             map.put("local_ratio", round4(raw[0]));
             map.put("stability", round4(raw[1]));
             map.put("repeat", round4(raw[2]));
-            map.put("foreign_penalty", round4(raw[3]));
+            map.put("foreign_penalty_sigmoid", round4(raw[3]));
             map.put("local_ratio_norm", round4(norm[0]));
             map.put("stability_norm", round4(norm[1]));
             map.put("repeat_norm", round4(norm[2]));
-            map.put("foreign_penalty_norm", round4(norm[3]));
             return objectMapper.writeValueAsString(map);
         } catch (Exception e) {
             return "{}";

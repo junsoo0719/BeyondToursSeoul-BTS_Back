@@ -11,8 +11,6 @@ import java.util.Optional;
 
 public interface AttractionLocalScoreRepository extends JpaRepository<AttractionLocalScore, AttractionLocalScoreId> {
 
-    boolean existsByIdDate(LocalDate date);
-
     @Query("SELECT MAX(a.id.date) FROM AttractionLocalScore a")
     Optional<LocalDate> findLatestDate();
 
