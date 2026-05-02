@@ -33,7 +33,7 @@ public class CityDataSampleRunner implements ApplicationRunner {
         log.info("[CityDataSampleRunner] citydata collect sample start. areaName={}", SAMPLE_AREA_NAME);
 
         try {
-            areaCongestionCollectService.collectOne(SAMPLE_AREA_NAME);
+            areaCongestionCollectService.collectAll();
 
             List<AreaCongestionRaw> rows =
                     areaCongestionRawRepository.findByAreaCodeOrderByPopulationTimeDesc(SAMPLE_AREA_CODE);

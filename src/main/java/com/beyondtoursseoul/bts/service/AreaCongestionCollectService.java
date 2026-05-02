@@ -24,21 +24,27 @@ public class AreaCongestionCollectService {
     private final SeoulCityDataApiService seoulCityDataApiService;
     private final AreaCongestionRawRepository areaCongestionRawRepository;
 
+    public enum CollectResult {
+        SUCCESS,
+        SKIPPED,
+        FAILED
+    }
+
     @Transactional
-    public void collectOne(String areaName) {
+    public CollectResult collectOne(String areaName) {
         log.info("[AreaCongestionCollectService] collect start. areaName={}", areaName);
 
         CityDataApiResponseDto response = seoulCityDataApiService.fetchByArea(areaName);
 
         if (response == null || response.getCityData() == null) {
             log.warn("[AreaCongestionCollectService] cityData is null. areaName={}", areaName);
-            return;
+            return CollectResult.FAILED;
         }
 
         if (response.getCityData().getLivePopulationStatuses() == null
                 || response.getCityData().getLivePopulationStatuses().isEmpty()) {
             log.warn("[AreaCongestionCollectService] livePopulationStatuses is empty. areaName={}", areaName);
-            return;
+            return CollectResult.FAILED;
         }
 
         CityDataApiResponseDto.CityData cityData = response.getCityData();
@@ -56,7 +62,7 @@ public class AreaCongestionCollectService {
         if (exists) {
             log.info("[AreaCongestionCollectService] already exists. areaCode={}, populationTime={}",
                     cityData.getAreaCode(), populationTime);
-            return;
+            return CollectResult.SKIPPED;
         }
 
         AreaCongestionRaw entity = AreaCongestionRaw.builder()
@@ -77,6 +83,7 @@ public class AreaCongestionCollectService {
         log.info("[AreaCongestionCollectService] collect success. areaCode={}, populationTime={}",
                 entity.getAreaCode(), entity.getPopulationTime());
 
+        return CollectResult.SUCCESS;
     }
 
     private LocalDateTime parsePopulationTime(String value) {
@@ -95,17 +102,38 @@ public class AreaCongestionCollectService {
 
     @Transactional
     public void collectAll() {
-        List<String> targetAreas = List.of(
-                "광화문·덕수궁"
-                // TODO: 나머지 장소 추가
+        List<String> TARGET_AREAS = List.of(
+                "광화문·덕수궁",
+                "강남역",
+                "명동 관광특구"
         );
 
-        for (String areaName : targetAreas) {
+        int total = TARGET_AREAS.size();
+        int successCount = 0;
+        int skippedCount = 0;
+        int failedCount = 0;
+
+        for (String areaName : TARGET_AREAS) {
             try {
-                collectOne(areaName);
+                CollectResult result = collectOne(areaName);
+
+                switch(result) {
+                    case SUCCESS -> successCount++;
+                    case SKIPPED -> skippedCount++;
+                    case FAILED -> failedCount++;
+                }
             } catch (Exception e) {
+                failedCount++;
                 log.error("[AreaCongestionCollectService] collect failed. areaName={}", areaName, e);
             }
         }
+
+        log.info(
+                "[AreaCongestionCollectService] collectAll finished. total={}, success={}, skipped={}, failed={}",
+                total,
+                successCount,
+                skippedCount,
+                failedCount
+        );
     }
 }
