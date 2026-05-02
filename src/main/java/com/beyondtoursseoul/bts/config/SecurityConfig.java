@@ -28,29 +28,18 @@ public class SecurityConfig {
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
                 .authorizeHttpRequests(auth -> auth
-                        // 회원가입/로그인 API는 인증 없이 접근 가능해야 한다.
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/signup")
-                        .permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/login")
-                        .permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/google")
-                        .permitAll()
-                        // 서버 상태 확인용 경로는 공개한다.
-                        .requestMatchers(HttpMethod.GET, "/health")
-                        .permitAll()
-                        // 현재 로그인 사용자 확인 API는 JWT 인증이 필요하다.
-                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/me")
-                        .authenticated()
-                        // swagger 경로 허용
-                        .requestMatchers(
-                                HttpMethod.GET,
-                                "/v3/api-docs/**",
-                                "/swagger-ui/**",
-                                "/swagger-ui.html"
-                        ).permitAll()
-                        // 아직 분류하지 않은 기존 API는 임시로 열어둔다.
-                        .anyRequest()
-                        .permitAll()
+                        // 1. 공개 접근 허용 API
+                        .requestMatchers("/api/v1/auth/signup", "/api/v1/auth/login", "/api/v1/auth/google").permitAll()
+                        .requestMatchers("/health").permitAll()
+                        .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+
+                        // 2. 인증이 필수인 API (코스 저장, 조회 등)
+                        .requestMatchers("/api/v1/auth/me").authenticated()
+                        .requestMatchers("/api/v1/courses/saved").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/courses/*/save").authenticated()
+
+                        // 3. 그 외 (관광지 조회 등은 일단 허용하되, 인증 정보가 있으면 사용 가능)
+                        .anyRequest().permitAll()
                 )
                 // Supabase가 발급한 JWT를 Resource Server 방식으로 검증한다.
                 .oauth2ResourceServer(oauth2 ->
