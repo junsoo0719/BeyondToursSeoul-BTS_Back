@@ -1,5 +1,6 @@
 package com.beyondtoursseoul.bts.service;
 
+import com.beyondtoursseoul.bts.config.CityDataAreaTargets;
 import com.beyondtoursseoul.bts.domain.AreaCongestionRaw;
 import com.beyondtoursseoul.bts.dto.CityDataApiResponseDto;
 import com.beyondtoursseoul.bts.repository.AreaCongestionRawRepository;
@@ -102,18 +103,12 @@ public class AreaCongestionCollectService {
 
     @Transactional
     public void collectAll() {
-        List<String> TARGET_AREAS = List.of(
-                "광화문·덕수궁",
-                "강남역",
-                "명동 관광특구"
-        );
-
-        int total = TARGET_AREAS.size();
+        int total = CityDataAreaTargets.AREA_NAMES.size();
         int successCount = 0;
         int skippedCount = 0;
         int failedCount = 0;
 
-        for (String areaName : TARGET_AREAS) {
+        for (String areaName : CityDataAreaTargets.AREA_NAMES) {
             try {
                 CollectResult result = collectOne(areaName);
 
