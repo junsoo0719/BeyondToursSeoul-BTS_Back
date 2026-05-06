@@ -4,6 +4,7 @@ import com.beyondtoursseoul.bts.domain.Attraction;
 import com.beyondtoursseoul.bts.domain.AttractionLocalScore;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
+import org.locationtech.jts.geom.Point;
 
 import java.math.BigDecimal;
 
@@ -43,6 +44,10 @@ public class AttractionSummaryResponse {
 
     public AttractionSummaryResponse(Attraction attraction, AttractionLocalScore score,
                                      String cat1Name, String cat2Name, String cat3Name) {
+        Point geom = attraction.getGeom();
+        if (geom == null) {
+            throw new IllegalStateException("관광지 좌표 데이터가 없습니다: id=" + attraction.getId());
+        }
         this.id = attraction.getId();
         this.name = attraction.getName();
         this.thumbnail = attraction.getThumbnail();
@@ -50,8 +55,8 @@ public class AttractionSummaryResponse {
         this.cat2Name = cat2Name;
         this.cat3Name = cat3Name;
         this.address = attraction.getAddress();
-        this.lng = attraction.getGeom().getX();
-        this.lat = attraction.getGeom().getY();
+        this.lng = geom.getX();
+        this.lat = geom.getY();
         this.score = score != null ? score.getScore() : null;
     }
 }
