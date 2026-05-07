@@ -1,6 +1,6 @@
 package com.beyondtoursseoul.bts.scheduler;
 
-import com.beyondtoursseoul.bts.repository.DongPopulationRawRepository;
+import com.beyondtoursseoul.bts.repository.DongLocalScoreRepository;
 import com.beyondtoursseoul.bts.service.LocalResidentApiService;
 import com.beyondtoursseoul.bts.service.score.AttractionScoreService;
 import com.beyondtoursseoul.bts.service.score.LocalScoreCalculateService;
@@ -21,7 +21,7 @@ public class DailyScoreScheduler {
     private final PopulationCollectService populationCollectService;
     private final LocalScoreCalculateService localScoreCalculateService;
     private final AttractionScoreService attractionScoreService;
-    private final DongPopulationRawRepository rawRepository;
+    private final DongLocalScoreRepository localScoreRepository;
 
     @Scheduled(cron = "0 0 1 * * *", zone = "Asia/Seoul")
     public void run() {
@@ -29,7 +29,7 @@ public class DailyScoreScheduler {
         try {
             LocalDate targetDate = localResidentApiService.findLatestAvailableDate();
 
-            if (rawRepository.existsByDate(targetDate)) {
+            if (localScoreRepository.existsByDate(targetDate)) {
                 log.info("[DailyScoreScheduler] {} 데이터 이미 존재 — 스킵", targetDate);
                 return;
             }
