@@ -19,6 +19,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -28,6 +29,8 @@ public class AttractionApiService {
     private static final String DETAIL_COMMON_URL = "https://apis.data.go.kr/B551011/KorService2/detailCommon2";
     private static final String DETAIL_INTRO_URL = "https://apis.data.go.kr/B551011/KorService2/detailIntro2";
     private static final String SEOUL_REGION_CD = "11";
+    // 행사/공연(15), 여행코스(25), 숙박(32)은 찐로컬 지수 추천 목적에 맞지 않아 수집 제외
+    private static final Set<String> EXCLUDED_CONTENT_TYPE_IDS = Set.of("15", "25", "32");
     private static final String SOURCE = "TOUR_API";
     private static final int PAGE_SIZE = 1000;
 
@@ -92,6 +95,9 @@ public class AttractionApiService {
     }
 
     private Optional<Attraction> toAttraction(Item item) {
+        if (EXCLUDED_CONTENT_TYPE_IDS.contains(item.getContentTypeId())) {
+            return Optional.empty();
+        }
         if (item.getMapX() == null || item.getMapX().isBlank()
                 || item.getMapY() == null || item.getMapY().isBlank()) {
             return Optional.empty();
