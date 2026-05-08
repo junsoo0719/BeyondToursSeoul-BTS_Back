@@ -10,8 +10,6 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -35,16 +33,11 @@ public class CityDataSampleRunner implements ApplicationRunner {
         try {
             areaCongestionCollectService.collectAll();
 
-            List<AreaCongestionRaw> rows =
-                    areaCongestionRawRepository.findByAreaCodeOrderByPopulationTimeDesc(SAMPLE_AREA_CODE);
-
-            if (rows.isEmpty()) {
-                log.warn("[CityDataSampleRunner] no saved row found. areaCode={}", SAMPLE_AREA_CODE);
-                return;
-            }
-
-            logSavedRow(rows.get(0));
-
+            areaCongestionRawRepository.findByAreaCode(SAMPLE_AREA_CODE)
+                    .ifPresentOrElse(
+                            this::logSavedRow,
+                            () -> log.warn("[CityDataSampleRunner] no saved row found. areaCode={}", SAMPLE_AREA_CODE)
+                    );
         } catch (Exception e) {
             log.error("[CityDataSampleRunner] citydata collect sample failed", e);
         }
@@ -55,11 +48,9 @@ public class CityDataSampleRunner implements ApplicationRunner {
         log.info("[CityDataSampleRunner] areaCode={}", row.getAreaCode());
         log.info("[CityDataSampleRunner] areaName={}", row.getAreaName());
         log.info("[CityDataSampleRunner] congestionLevel={}", row.getCongestionLevel());
-        log.info("[CityDataSampleRunner] congestionMessage={}", row.getCongestionMessage());
-        log.info("[CityDataSampleRunner] populationMin={}", row.getPopulationMin());
-        log.info("[CityDataSampleRunner] populationMax={}", row.getPopulationMax());
+        log.info("[CityDataSampleRunner] latitude={}", row.getLatitude());
+        log.info("[CityDataSampleRunner] longitude={}", row.getLongitude());
         log.info("[CityDataSampleRunner] populationTime={}", row.getPopulationTime());
-        log.info("[CityDataSampleRunner] forecastYn={}", row.getForecastYn());
         log.info("[CityDataSampleRunner] collectedAt={}", row.getCollectedAt());
     }
 }

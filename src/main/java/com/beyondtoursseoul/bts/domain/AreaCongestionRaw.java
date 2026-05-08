@@ -14,8 +14,8 @@ import java.time.OffsetDateTime;
         name = "area_congestion_raw",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uk_area_congestion_raw_area_code_population_time",
-                        columnNames = {"area_code", "population_time"}
+                        name = "uk_area_congestion_raw_area_code",
+                        columnNames = {"area_code"}
                 )
         }
 )
@@ -36,49 +36,50 @@ public class AreaCongestionRaw {
     @Column(name = "congestion_level", nullable = false, length = 50)
     private String congestionLevel;
 
-    @Column(name = "congestion_message", columnDefinition = "text")
-    private String congestionMessage;
+    @Column(name = "latitude", nullable = false)
+    private Double latitude;
 
-    @Column(name = "population_min")
-    private Integer populationMin;
-
-    @Column(name = "population_max")
-    private Integer populationMax;
+    @Column(name = "longitude", nullable = false)
+    private Double longitude;
 
     @Column(name = "population_time", nullable = false)
     private LocalDateTime populationTime;
 
-    @Column(name = "forecast_yn", length = 1)
-    private String forecastYn;
-
     @Column(name = "collected_at", nullable = false)
     private OffsetDateTime collectedAt;
-
-    @Column(name = "raw_payload", columnDefinition = "text")
-    private String rawPayload;
 
     @Builder
     public AreaCongestionRaw(
             String areaCode,
             String areaName,
             String congestionLevel,
-            String congestionMessage,
-            Integer populationMin,
-            Integer populationMax,
+            Double latitude,
+            Double longitude,
             LocalDateTime populationTime,
-            String forecastYn,
-            OffsetDateTime collectedAt,
-            String rawPayload
+            OffsetDateTime collectedAt
     ) {
         this.areaCode = areaCode;
         this.areaName = areaName;
         this.congestionLevel = congestionLevel;
-        this.congestionMessage = congestionMessage;
-        this.populationMin = populationMin;
-        this.populationMax = populationMax;
+        this.latitude = latitude;
+        this.longitude = longitude;
         this.populationTime = populationTime;
-        this.forecastYn = forecastYn;
         this.collectedAt = collectedAt;
-        this.rawPayload = rawPayload;
+    }
+
+    public void updateLatest(
+            String areaName,
+            String congestionLevel,
+            Double latitude,
+            Double longitude,
+            LocalDateTime populationTime,
+            OffsetDateTime collectedAt
+    ) {
+        this.areaName = areaName;
+        this.congestionLevel = congestionLevel;
+        this.latitude = latitude;
+        this.longitude = longitude;
+        this.populationTime = populationTime;
+        this.collectedAt = collectedAt;
     }
 }
