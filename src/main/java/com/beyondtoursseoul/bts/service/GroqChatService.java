@@ -17,9 +17,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -344,6 +346,7 @@ public class GroqChatService {
             if (!(daysObj instanceof List<?> dayList) || dayList.isEmpty()) return response;
 
             int candidateIndex = 0;
+            Set<String> usedPlaceNames = new HashSet<>();
             for (Object dayRaw : dayList) {
                 if (!(dayRaw instanceof Map<?, ?> dayMap)) continue;
                 Map<String, Object> day = (Map<String, Object>) dayMap;
@@ -366,16 +369,27 @@ public class GroqChatService {
 
                     if (type.isBlank()) { type = slotTypeByIndex(i); slot.put("type", type); }
                     if (label.isBlank()) { slot.put("label", type); }
-                    if (placeName.isBlank()) {
-                        placeName = candidate.path("n").asText("").trim();
+                    if (placeName.isBlank() || usedPlaceNames.contains(placeName.toLowerCase())) {
+                        JsonNode uniqueCandidate = findNextUnusedCandidate(candidates, usedPlaceNames, candidateIndex);
+                        if (uniqueCandidate != null) {
+                            candidate = uniqueCandidate;
+                            placeName = candidate.path("n").asText("").trim();
+                            address = candidate.path("a").asText("");
+                        } else if (placeName.isBlank()) {
+                            placeName = candidate.path("n").asText("").trim();
+                        }
                         slot.put("placeName", placeName);
                     }
                     if (address.isBlank()) { slot.put("address", candidate.path("a").asText("")); }
                     if (reason.isBlank() && !placeName.isBlank()) {
                         slot.put("reason", placeName + " 중심으로 이동 동선을 고려한 추천 코스입니다.");
                     }
+                    if (!placeName.isBlank()) {
+                        usedPlaceNames.add(placeName.toLowerCase());
+                    }
                 }
             }
+            applyLockerPreference(dayList, candidates);
             return new AiChatResponse(response.getAnswer(), structured, response.getModel());
         } catch (Exception e) {
             log.warn("[AI] ensureStructuredQuality 실패, 원본 반환: {}", e.getMessage());
@@ -504,8 +518,11 @@ public class GroqChatService {
                 - slot.type/label: one of 아침|오전 코스|점심|오후 코스|저녁|밤 코스
                 - slot.label == slot.type
                 - slot.placeName: use CANDIDATES[].n first, never empty
+                - Do not repeat the same placeName across all days/slots (case-insensitive). One place can appear only once.
                 - slot.address: use CANDIDATES[].a, empty if unknown
                 - slot.reason: Korean sentence ≥10 chars
+                - If CANDIDATES includes locker category, include locker once in day 1 first slot OR last day last slot.
+                - Locker slot reason should mention luggage convenience before check-in or after check-out.
                 - CANDIDATES key: n=name, a=address, c=category
                 """.formatted(language);
     }
@@ -518,8 +535,10 @@ public class GroqChatService {
                 - Each slot.type must be one of: 아침, 오전 코스, 점심, 오후 코스, 저녁, 밤 코스
                 - Each slot.label must equal slot.type
                 - slot.placeName must be a concrete place name in Seoul, never empty
+                - Never duplicate placeName across days/slots (case-insensitive)
                 - slot.reason must be at least 10 Korean characters
                 - slot.address should be filled when context contains it, otherwise use ""
+                - If locker candidate exists, add exactly one locker slot on day 1 first slot or last day last slot
                 - Never output placeholder words or gibberish
                 - Keep strict valid JSON only
                 """;
@@ -530,6 +549,118 @@ public class GroqChatService {
             return "오후 코스";
         }
         return SLOT_ORDER.get(index);
+    }
+
+    private JsonNode findNextUnusedCandidate(ArrayNode candidates, Set<String> usedPlaceNames, int seedIndex) {
+        if (candidates == null || candidates.isEmpty()) {
+            return null;
+        }
+        for (int i = 0; i < candidates.size(); i++) {
+            JsonNode candidate = candidates.get((seedIndex + i) % candidates.size());
+            String name = candidate.path("n").asText("").trim().toLowerCase();
+            if (!name.isBlank() && !usedPlaceNames.contains(name)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void applyLockerPreference(List<?> dayList, ArrayNode candidates) {
+        JsonNode lockerCandidate = findLockerCandidate(candidates);
+        if (lockerCandidate == null) {
+            return;
+        }
+        if (alreadyContainsLocker(dayList, lockerCandidate)) {
+            return;
+        }
+
+        Map<String, Object> firstDay = firstMap(dayList);
+        Map<String, Object> lastDay = lastMap(dayList);
+        if (firstDay == null && lastDay == null) {
+            return;
+        }
+        boolean useFirstDay = firstDay != null;
+        Map<String, Object> targetDay = useFirstDay ? firstDay : lastDay;
+        List<Map<String, Object>> slots = mutableSlots(targetDay);
+        if (slots.isEmpty()) {
+            return;
+        }
+
+        Map<String, Object> targetSlot = useFirstDay ? slots.get(0) : slots.get(slots.size() - 1);
+        targetSlot.put("type", useFirstDay ? "아침" : "저녁");
+        targetSlot.put("label", targetSlot.get("type"));
+        targetSlot.put("placeName", lockerCandidate.path("n").asText("").trim());
+        targetSlot.put("address", lockerCandidate.path("a").asText(""));
+        targetSlot.put("reason", useFirstDay
+                ? "체크인 전 짐 보관으로 이동 부담을 줄이고 주변 관광 동선을 가볍게 시작할 수 있습니다."
+                : "체크아웃 후 짐 보관으로 마지막 일정 이동이 편해지고 귀가 전 시간을 효율적으로 활용할 수 있습니다.");
+    }
+
+    private JsonNode findLockerCandidate(ArrayNode candidates) {
+        if (candidates == null || !candidates.isArray() || candidates.isEmpty()) {
+            return null;
+        }
+        for (JsonNode candidate : candidates) {
+            String category = candidate.path("c").asText("");
+            if ("locker".equalsIgnoreCase(category)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean alreadyContainsLocker(List<?> dayList, JsonNode lockerCandidate) {
+        String lockerName = lockerCandidate.path("n").asText("").trim().toLowerCase();
+        for (Object dayRaw : dayList) {
+            if (!(dayRaw instanceof Map<?, ?> dayMap)) continue;
+            Object slotsObj = ((Map<String, Object>) dayMap).get("slots");
+            if (!(slotsObj instanceof List<?> slotList)) continue;
+            for (Object slotRaw : slotList) {
+                if (!(slotRaw instanceof Map<?, ?> slotMap)) continue;
+                Map<String, Object> slot = (Map<String, Object>) slotMap;
+                String placeName = str(slot.get("placeName")).toLowerCase();
+                String reason = str(slot.get("reason")).toLowerCase();
+                if (!lockerName.isBlank() && placeName.equals(lockerName)) {
+                    return true;
+                }
+                if (reason.contains("보관") || reason.contains("locker") || reason.contains("짐")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> firstMap(List<?> list) {
+        if (list == null || list.isEmpty()) return null;
+        Object raw = list.get(0);
+        if (raw instanceof Map<?, ?> map) return (Map<String, Object>) map;
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> lastMap(List<?> list) {
+        if (list == null || list.isEmpty()) return null;
+        Object raw = list.get(list.size() - 1);
+        if (raw instanceof Map<?, ?> map) return (Map<String, Object>) map;
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> mutableSlots(Map<String, Object> day) {
+        if (day == null) return List.of();
+        Object slotsObj = day.get("slots");
+        if (!(slotsObj instanceof List<?> slotList)) return List.of();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object slotRaw : slotList) {
+            if (slotRaw instanceof Map<?, ?> slotMap) {
+                out.add((Map<String, Object>) slotMap);
+            }
+        }
+        return out;
     }
 
     @Getter
