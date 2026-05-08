@@ -3,6 +3,7 @@ package com.beyondtoursseoul.bts.service;
 import com.beyondtoursseoul.bts.domain.Attraction;
 import com.beyondtoursseoul.bts.domain.AttractionLocalScore;
 import com.beyondtoursseoul.bts.domain.AttractionTranslation;
+import com.beyondtoursseoul.bts.domain.TourCategory;
 import com.beyondtoursseoul.bts.dto.attraction.AttractionDetailResponse;
 import com.beyondtoursseoul.bts.dto.attraction.AttractionSummaryResponse;
 import com.beyondtoursseoul.bts.repository.AttractionLocalScoreRepository;
@@ -40,9 +41,9 @@ public class AttractionQueryService {
                 .stream()
                 .collect(Collectors.toMap(s -> s.getId().getAttractionId(), s -> s));
 
-        Map<String, String> categoryNames = categoryRepository.findAll()
+        Map<String, TourCategory> categories = categoryRepository.findAll()
                 .stream()
-                .collect(Collectors.toMap(c -> c.getCode(), c -> c.getName()));
+                .collect(Collectors.toMap(TourCategory::getCode, c -> c));
 
         List<Attraction> attractions = attractionRepository.findAll().stream()
                 .filter(a -> scoreMap.containsKey(a.getId()))
@@ -58,9 +59,9 @@ public class AttractionQueryService {
                 .map(a -> new AttractionSummaryResponse(
                         a,
                         scoreMap.get(a.getId()),
-                        resolveCategoryName(categoryNames, a.getCat1()),
-                        resolveCategoryName(categoryNames, a.getCat2()),
-                        resolveCategoryName(categoryNames, a.getCat3()),
+                        resolveCategoryName(categories, a.getCat1(), lang),
+                        resolveCategoryName(categories, a.getCat2(), lang),
+                        resolveCategoryName(categories, a.getCat3(), lang),
                         translationMap.get(a.getId())
                 ))
                 .sorted(Comparator.comparing(AttractionSummaryResponse::getScore,
@@ -68,9 +69,11 @@ public class AttractionQueryService {
                 .collect(Collectors.toList());
     }
 
-    private String resolveCategoryName(Map<String, String> categoryNames, String code) {
+    private String resolveCategoryName(Map<String, TourCategory> categories, String code, String lang) {
         if (code == null) return "미분류";
-        return categoryNames.getOrDefault(code, "미분류");
+        TourCategory category = categories.get(code);
+        if (category == null) return "미분류";
+        return category.getLocalizedName(lang);
     }
 
     private boolean isKorean(String lang) {
@@ -89,9 +92,9 @@ public class AttractionQueryService {
             attraction.updateDetail(common.overview(), operatingHours, common.tel());
         }
 
-        Map<String, String> categoryNames = categoryRepository.findAll()
+        Map<String, TourCategory> categories = categoryRepository.findAll()
                 .stream()
-                .collect(Collectors.toMap(c -> c.getCode(), c -> c.getName()));
+                .collect(Collectors.toMap(TourCategory::getCode, c -> c));
 
         LocalDate latestDate = scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
         Map<String, BigDecimal> scores = scoreRepository.findByIdAttractionIdAndIdDate(id, latestDate)
@@ -106,9 +109,9 @@ public class AttractionQueryService {
 
         return new AttractionDetailResponse(
                 attraction,
-                resolveCategoryName(categoryNames, attraction.getCat1()),
-                resolveCategoryName(categoryNames, attraction.getCat2()),
-                resolveCategoryName(categoryNames, attraction.getCat3()),
+                resolveCategoryName(categories, attraction.getCat1(), lang),
+                resolveCategoryName(categories, attraction.getCat2(), lang),
+                resolveCategoryName(categories, attraction.getCat3(), lang),
                 scores,
                 translation
         );
