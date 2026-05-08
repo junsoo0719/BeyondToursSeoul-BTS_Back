@@ -9,17 +9,21 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class AttractionScoreServiceTest {
 
     @Mock JdbcTemplate jdbcTemplate;
+    @Mock TransactionTemplate transactionTemplate;
     @Mock AttractionLocalScoreRepository repository;
 
     @InjectMocks AttractionScoreService service;
@@ -27,18 +31,30 @@ class AttractionScoreServiceTest {
     @Test
     void 신규_날짜면_전체_시간대_5회_INSERT한다() {
         LocalDate date = LocalDate.of(2026, 4, 28);
-        when(repository.existsByIdDate(date)).thenReturn(false);
-        when(jdbcTemplate.update(any(String.class), any(), any(), any(), any(), any())).thenReturn(100);
+        when(repository.findLatestDate()).thenReturn(Optional.empty());
+        // advisory lock/unlock은 인프라 역할이므로 lenient — non-lenient stub이 없어야 unlock 호출 시 PotentialStubbingProblem 방지
+        lenient().when(jdbcTemplate.queryForObject(contains("pg_try_advisory_lock"), eq(Boolean.class), any()))
+                .thenReturn(true);
+        lenient().when(jdbcTemplate.queryForObject(contains("pg_advisory_unlock"), eq(Boolean.class), any()))
+                .thenReturn(true);
+        when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+            TransactionCallback<?> cb = inv.getArgument(0);
+            return cb.doInTransaction(null);
+        });
+        // DELETE(2 args)와 INSERT(5 args) 모두 lenient — non-lenient stub이 있으면 arg 불일치 시 PotentialStubbingProblem 발생
+        lenient().when(jdbcTemplate.update(contains("DELETE"), any(), any())).thenReturn(0);
+        lenient().when(jdbcTemplate.update(any(String.class), any(), any(), any(), any(), any())).thenReturn(100);
 
         service.calculateAndSave(date);
 
-        verify(jdbcTemplate, times(TimeSlot.values().length)).update(any(String.class), any(), any(), any(), any(), any());
+        verify(jdbcTemplate, times(TimeSlot.values().length))
+                .update(any(String.class), any(), any(), any(), any(), any());
     }
 
     @Test
     void 이미_계산된_날짜면_INSERT하지_않는다() {
         LocalDate date = LocalDate.of(2026, 4, 28);
-        when(repository.existsByIdDate(date)).thenReturn(true);
+        when(repository.findLatestDate()).thenReturn(Optional.of(date));
 
         service.calculateAndSave(date);
 

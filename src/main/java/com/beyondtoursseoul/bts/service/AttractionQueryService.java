@@ -47,13 +47,18 @@ public class AttractionQueryService {
                 .map(a -> new AttractionSummaryResponse(
                         a,
                         scoreMap.get(a.getId()),
-                        categoryNames.getOrDefault(a.getCat1(), a.getCat1()),
-                        categoryNames.getOrDefault(a.getCat2(), a.getCat2()),
-                        categoryNames.getOrDefault(a.getCat3(), a.getCat3())
+                        resolveCategoryName(categoryNames, a.getCat1()),
+                        resolveCategoryName(categoryNames, a.getCat2()),
+                        resolveCategoryName(categoryNames, a.getCat3())
                 ))
                 .sorted(Comparator.comparing(AttractionSummaryResponse::getScore,
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .collect(Collectors.toList());
+    }
+
+    private String resolveCategoryName(Map<String, String> categoryNames, String code) {
+        if (code == null) return "미분류";
+        return categoryNames.getOrDefault(code, "미분류");
     }
 
     @Transactional
@@ -82,9 +87,9 @@ public class AttractionQueryService {
 
         return new AttractionDetailResponse(
                 attraction,
-                categoryNames.getOrDefault(attraction.getCat1(), attraction.getCat1()),
-                categoryNames.getOrDefault(attraction.getCat2(), attraction.getCat2()),
-                categoryNames.getOrDefault(attraction.getCat3(), attraction.getCat3()),
+                resolveCategoryName(categoryNames, attraction.getCat1()),
+                resolveCategoryName(categoryNames, attraction.getCat2()),
+                resolveCategoryName(categoryNames, attraction.getCat3()),
                 scores
         );
     }
