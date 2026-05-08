@@ -7,13 +7,10 @@ create table if not exists public.area_congestion_raw (
     area_code varchar(50) not null,
     area_name varchar(100) not null,
     congestion_level varchar(50) not null,
-    congestion_message text,
-    population_min integer,
-    population_max integer,
+    latitude double precision not null,
+    longitude double precision not null,
     population_time timestamp not null,
-    forecast_yn varchar(1),
     collected_at timestamptz not null,
-    raw_payload text,
-    constraint uk_area_congestion_raw_area_code_population_time
-        unique (area_code, population_time)
+    constraint uk_area_congestion_raw_area_code
+        unique (area_code)
 );
