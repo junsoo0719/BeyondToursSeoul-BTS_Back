@@ -1,6 +1,7 @@
 package com.beyondtoursseoul.bts.dto.attraction;
 
 import com.beyondtoursseoul.bts.domain.Attraction;
+import com.beyondtoursseoul.bts.domain.AttractionTranslation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import org.locationtech.jts.geom.Point;
@@ -56,23 +57,28 @@ public class AttractionDetailResponse {
 
     public AttractionDetailResponse(Attraction attraction,
                                     String cat1Name, String cat2Name, String cat3Name,
-                                    Map<String, BigDecimal> scores) {
+                                    Map<String, BigDecimal> scores,
+                                    AttractionTranslation translation) {
         Point geom = attraction.getGeom();
         if (geom == null) {
             throw new IllegalStateException("관광지 좌표 데이터가 없습니다: id=" + attraction.getId());
         }
         this.id = attraction.getId();
-        this.name = attraction.getName();
+        this.name = translation != null && translation.getName() != null
+                ? translation.getName() : attraction.getName();
         this.thumbnail = attraction.getThumbnail();
         this.cat1Name = cat1Name;
         this.cat2Name = cat2Name;
         this.cat3Name = cat3Name;
-        this.address = attraction.getAddress();
+        this.address = translation != null && translation.getAddress() != null
+                ? translation.getAddress() : attraction.getAddress();
         this.lng = geom.getX();
         this.lat = geom.getY();
         this.tel = attraction.getTel();
-        this.overview = attraction.getOverview();
-        this.operatingHours = attraction.getOperatingHours();
+        this.overview = translation != null && translation.getOverview() != null
+                ? translation.getOverview() : attraction.getOverview();
+        this.operatingHours = translation != null && translation.getOperatingHours() != null
+                ? translation.getOperatingHours() : attraction.getOperatingHours();
         this.scoresAvailable = scores != null && !scores.isEmpty();
         this.scores = scores;
     }
