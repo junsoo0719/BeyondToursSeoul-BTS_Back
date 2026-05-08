@@ -1,5 +1,6 @@
 package com.beyondtoursseoul.bts.service;
 
+import com.beyondtoursseoul.bts.config.CityDataAreaTarget;
 import com.beyondtoursseoul.bts.config.CityDataAreaTargets;
 import com.beyondtoursseoul.bts.domain.AreaCongestionRaw;
 import com.beyondtoursseoul.bts.dto.CityDataApiResponseDto;
@@ -12,7 +13,6 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.List;
 
 @Slf4j
 @Service
@@ -27,24 +27,23 @@ public class AreaCongestionCollectService {
 
     public enum CollectResult {
         SUCCESS,
-        SKIPPED,
         FAILED
     }
 
     @Transactional
-    public CollectResult collectOne(String areaName) {
-        log.info("[AreaCongestionCollectService] collect start. areaName={}", areaName);
+    public CollectResult collectOne(CityDataAreaTarget target) {
+        log.info("[AreaCongestionCollectService] collect start. areaName={}", target.areaName());
 
-        CityDataApiResponseDto response = seoulCityDataApiService.fetchByArea(areaName);
+        CityDataApiResponseDto response = seoulCityDataApiService.fetchByArea(target.areaName());
 
         if (response == null || response.getCityData() == null) {
-            log.warn("[AreaCongestionCollectService] cityData is null. areaName={}", areaName);
+            log.warn("[AreaCongestionCollectService] cityData is null. areaName={}", target.areaName());
             return CollectResult.FAILED;
         }
 
         if (response.getCityData().getLivePopulationStatuses() == null
                 || response.getCityData().getLivePopulationStatuses().isEmpty()) {
-            log.warn("[AreaCongestionCollectService] livePopulationStatuses is empty. areaName={}", areaName);
+            log.warn("[AreaCongestionCollectService] livePopulationStatuses is empty. areaName={}", target.areaName());
             return CollectResult.FAILED;
         }
 
@@ -52,32 +51,29 @@ public class AreaCongestionCollectService {
         CityDataApiResponseDto.LivePopulationStatus status = cityData.getLivePopulationStatuses().get(0);
 
         LocalDateTime populationTime = parsePopulationTime(status.getPopulationTime());
-        Integer populationMin = parseInteger(status.getAreaPpltnMin());
-        Integer populationMax = parseInteger(status.getAreaPpltnMax());
+        OffsetDateTime collectedAt = OffsetDateTime.now();
 
-        boolean exists = areaCongestionRawRepository.existsByAreaCodeAndPopulationTime(
-                cityData.getAreaCode(),
-                populationTime
-        );
-
-        if (exists) {
-            log.info("[AreaCongestionCollectService] already exists. areaCode={}, populationTime={}",
-                    cityData.getAreaCode(), populationTime);
-            return CollectResult.SKIPPED;
-        }
-
-        AreaCongestionRaw entity = AreaCongestionRaw.builder()
-                .areaCode(cityData.getAreaCode())
-                .areaName(cityData.getAreaName())
-                .congestionLevel(status.getCongestionLevel())
-                .congestionMessage(status.getCongestionMessage())
-                .populationMin(populationMin)
-                .populationMax(populationMax)
-                .populationTime(populationTime)
-                .forecastYn(status.getForecastYn())
-                .collectedAt(OffsetDateTime.now())
-                .rawPayload(null)
-                .build();
+        AreaCongestionRaw entity = areaCongestionRawRepository.findByAreaCode(cityData.getAreaCode())
+                .map(existing -> {
+                    existing.updateLatest(
+                            cityData.getAreaName(),
+                            status.getCongestionLevel(),
+                            target.latitude(),
+                            target.longitude(),
+                            populationTime,
+                            collectedAt
+                    );
+                    return existing;
+                })
+                .orElseGet(() -> AreaCongestionRaw.builder()
+                        .areaCode(cityData.getAreaCode())
+                        .areaName(cityData.getAreaName())
+                        .congestionLevel(status.getCongestionLevel())
+                        .latitude(target.latitude())
+                        .longitude(target.longitude())
+                        .populationTime(populationTime)
+                        .collectedAt(collectedAt)
+                        .build());
 
         areaCongestionRawRepository.save(entity);
 
@@ -94,40 +90,29 @@ public class AreaCongestionCollectService {
         return LocalDateTime.parse(value, POPULATION_TIME_FORMATTER);
     }
 
-    private Integer parseInteger(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        return Integer.parseInt(value);
-    }
-
-    @Transactional
     public void collectAll() {
         int total = CityDataAreaTargets.AREA_NAMES.size();
         int successCount = 0;
-        int skippedCount = 0;
         int failedCount = 0;
 
-        for (String areaName : CityDataAreaTargets.AREA_NAMES) {
+        for (CityDataAreaTarget target : CityDataAreaTargets.AREA_NAMES) {
             try {
-                CollectResult result = collectOne(areaName);
+                CollectResult result = collectOne(target);
 
                 switch(result) {
                     case SUCCESS -> successCount++;
-                    case SKIPPED -> skippedCount++;
                     case FAILED -> failedCount++;
                 }
             } catch (Exception e) {
                 failedCount++;
-                log.error("[AreaCongestionCollectService] collect failed. areaName={}", areaName, e);
+                log.error("[AreaCongestionCollectService] collect failed. areaName={}", target.areaName(), e);
             }
         }
 
         log.info(
-                "[AreaCongestionCollectService] collectAll finished. total={}, success={}, skipped={}, failed={}",
+                "[AreaCongestionCollectService] collectAll finished. total={}, success={}, failed={}",
                 total,
                 successCount,
-                skippedCount,
                 failedCount
         );
     }
