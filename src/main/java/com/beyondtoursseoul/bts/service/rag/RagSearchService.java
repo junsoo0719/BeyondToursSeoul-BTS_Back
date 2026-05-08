@@ -23,6 +23,7 @@ public class RagSearchService {
     private static final int MIN_RESULT_COUNT = 12;
     private static final int MAX_RESULT_COUNT = 18;
     private static final int MAX_CANDIDATE_COUNT = 80;
+    private static final int DEFAULT_LOCAL_RATIO = 50;
     private static final Pattern NIGHTS_DAYS_PATTERN = Pattern.compile("(\\d+)\\s*박\\s*(\\d+)\\s*일");
     private static final Pattern DATE_RANGE_PATTERN = Pattern.compile(
             "(\\d{4}-\\d{2}-\\d{2})\\s*(?:~|〜|–|—|-)\\s*(\\d{4}-\\d{2}-\\d{2})"
@@ -44,6 +45,10 @@ public class RagSearchService {
     }
 
     public List<RagDocumentContext> search(String message, String language) {
+        return search(message, language, DEFAULT_LOCAL_RATIO);
+    }
+
+    public List<RagDocumentContext> search(String message, String language, int localRatio) {
         List<String> keywords = extractKeywords(message);
         if (keywords.isEmpty()) {
             log.info("[RAG] 검색 키워드 없음. message={}", summarize(message, 80));
@@ -87,23 +92,76 @@ public class RagSearchService {
                     """.formatted(paramName));
         }
 
+        // localRatio 0~100 → target 0.0~1.0
+        double targetLocal = Math.max(0.0, Math.min(100, localRatio)) / 100.0;
+        params.addValue("targetLocal", targetLocal);
+
+        /*
+         * alignment_score = local_alignment + keyword_alignment + zone_alignment
+         *   - local_alignment: 로컬 선호(localRatio)와 동 점수의 정렬
+         *   - keyword_alignment: 질의 키워드 일치도
+         *   - zone_alignment: 동일 권역(dong_code) 응집도 가점
+         *
+         * zone_alignment 규칙:
+         *   1) 1차 후보군에서 가장 많이 등장한 dong_code를 dominant zone으로 계산
+         *   2) 해당 zone 문서에 가점을 부여해 하루 동선이 한 권역에 묶이도록 유도
+         *   3) dong_code가 없는 문서는 중립값(0.5) 적용
+         */
         String sql = """
+                with latest_dong_score as (
+                    select dls.dong_code, max(dls.score)::double precision as local_score
+                    from public.dong_local_score dls
+                    where dls.date = (select max(date) from public.dong_local_score)
+                    group by dls.dong_code
+                ),
+                scored as (
+                    select
+                      rd.id,
+                      rd.source_type,
+                      rd.source_id,
+                      rd.title,
+                      rd.content,
+                      rd.lang_code,
+                      rd.dong_code,
+                      rd.latitude,
+                      rd.longitude,
+                      rd.metadata::text as metadata,
+                      coalesce(lds.local_score, 0.5)::double precision as local_score,
+                      (%s)::double precision as match_score
+                    from public.rag_documents rd
+                    left join latest_dong_score lds on lds.dong_code = rd.dong_code
+                    where rd.lang_code in (:langCodes)
+                      and (%s)
+                ),
+                max_match as (
+                    select greatest(max(match_score), 1) as val from scored
+                ),
+                dominant_zone as (
+                    select s.dong_code
+                    from scored s
+                    where s.dong_code is not null
+                    group by s.dong_code
+                    order by count(*) desc, max(s.match_score) desc
+                    limit 1
+                )
                 select
-                  id,
-                  source_type,
-                  source_id,
-                  title,
-                  content,
-                  lang_code,
-                  dong_code,
-                  latitude,
-                  longitude,
-                  metadata::text as metadata,
-                  %s as match_score
-                from public.rag_documents
-                where lang_code in (:langCodes)
-                  and (%s)
-                order by match_score desc, updated_at desc
+                  s.*,
+                  (
+                    0.50 * (1.0 - abs(s.local_score - :targetLocal))
+                    + 0.30 * (s.match_score / mm.val)
+                    + 0.20 * (
+                        case
+                            when s.dong_code is null then 0.5
+                            when dz.dong_code is null then 0.5
+                            when s.dong_code = dz.dong_code then 1.0
+                            else 0.0
+                        end
+                    )
+                  ) as alignment_score
+                from scored s
+                cross join max_match mm
+                left join dominant_zone dz on true
+                order by alignment_score desc, s.match_score desc
                 limit :limit
                 """.formatted(scoreExpression, matchCondition);
 
@@ -125,12 +183,14 @@ public class RagSearchService {
                     rs.getObject("longitude", Double.class),
                     metadata,
                     rs.getInt("match_score"),
-                    classifyCategory(sourceType, title, content, metadata)
+                    classifyCategory(sourceType, title, content, metadata),
+                    rs.getObject("local_score", Double.class),
+                    rs.getObject("alignment_score", Double.class)
             );
         });
 
         List<RagDocumentContext> results = diversifyResults(candidates, resultLimit, tripDays);
-        logSearchResults(message, keywords, langCodes, tripDays, resultLimit, results);
+        logSearchResults(message, keywords, langCodes, tripDays, resultLimit, localRatio, results);
         return results;
     }
 
@@ -189,21 +249,22 @@ public class RagSearchService {
             List<String> langCodes,
             int tripDays,
             int resultLimit,
+            int localRatio,
             List<RagDocumentContext> results
     ) {
-        log.info("[RAG] message='{}', langCodes={}, tripDays={}, resultLimit={}, keywords={}, resultCount={}",
-                summarize(message, 80), langCodes, tripDays, resultLimit, keywords, results.size());
+        log.info("[RAG] message='{}', langCodes={}, tripDays={}, resultLimit={}, localRatio={}, keywords={}, resultCount={}",
+                summarize(message, 80), langCodes, tripDays, resultLimit, localRatio, keywords, results.size());
 
         for (int i = 0; i < Math.min(results.size(), 5); i++) {
             RagDocumentContext result = results.get(i);
-            log.info("[RAG] #{} category={}, type={}, title='{}', lang={}, dong={}, score={}, content='{}'",
+            log.info("[RAG] #{} category={}, type={}, title='{}', dong={}, localScore={}, alignment={}, content='{}'",
                     i + 1,
                     result.category(),
                     result.sourceType(),
                     summarize(result.title(), 60),
-                    result.langCode(),
                     result.dongCode(),
-                    result.matchScore(),
+                    result.localScore() != null ? String.format("%.2f", result.localScore()) : "n/a",
+                    result.alignmentScore() != null ? String.format("%.3f", result.alignmentScore()) : "n/a",
                     summarize(result.content(), 120));
         }
     }
@@ -380,7 +441,9 @@ public class RagSearchService {
             Double longitude,
             String metadata,
             Integer matchScore,
-            String category
+            String category,
+            Double localScore,
+            Double alignmentScore
     ) {
     }
 }
