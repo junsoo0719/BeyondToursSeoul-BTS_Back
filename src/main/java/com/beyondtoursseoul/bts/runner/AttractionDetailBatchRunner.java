@@ -1,6 +1,7 @@
 package com.beyondtoursseoul.bts.runner;
 
 import com.beyondtoursseoul.bts.domain.Attraction;
+import com.beyondtoursseoul.bts.exception.TourApiRateLimitException;
 import com.beyondtoursseoul.bts.repository.AttractionRepository;
 import com.beyondtoursseoul.bts.service.AttractionApiService;
 import lombok.RequiredArgsConstructor;
@@ -53,6 +54,10 @@ public class AttractionDetailBatchRunner implements ApplicationRunner {
                 }
 
                 Thread.sleep(DELAY_MS);
+            } catch (TourApiRateLimitException e) {
+                log.warn("[DetailBatch] API 일일 한도 초과 — 배치 중단. 나머지 {}건은 다음 실행에서 처리",
+                        total - success - failed);
+                break;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.warn("[DetailBatch] 인터럽트 — 배치 중단 (완료: {}/{})", success, total);
