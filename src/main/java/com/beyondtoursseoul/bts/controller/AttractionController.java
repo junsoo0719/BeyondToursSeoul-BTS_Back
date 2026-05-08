@@ -37,8 +37,10 @@ public class AttractionController {
             @Parameter(description = "조회 날짜 (yyyy-MM-dd). 미입력 시 DB 최신 날짜 사용")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @Parameter(description = "시간대. morning/lunch/afternoon/evening/night", example = "afternoon")
-            @RequestParam(defaultValue = "afternoon") String timeSlot) {
-        return ResponseEntity.ok(attractionQueryService.getList(date, timeSlot));
+            @RequestParam(defaultValue = "afternoon") String timeSlot,
+            @Parameter(description = "언어 코드. ko(기본)/en/zh/ja")
+            @RequestHeader(value = "Accept-Language", required = false, defaultValue = "ko") String lang) {
+        return ResponseEntity.ok(attractionQueryService.getList(date, timeSlot, parseLang(lang)));
     }
 
     @Operation(
@@ -53,7 +55,14 @@ public class AttractionController {
     })
     @GetMapping("/{id}")
     public ResponseEntity<AttractionDetailResponse> getDetail(
-            @Parameter(description = "관광지 ID") @PathVariable Long id) {
-        return ResponseEntity.ok(attractionQueryService.getDetail(id));
+            @Parameter(description = "관광지 ID") @PathVariable Long id,
+            @Parameter(description = "언어 코드. ko(기본)/en/zh/ja")
+            @RequestHeader(value = "Accept-Language", required = false, defaultValue = "ko") String lang) {
+        return ResponseEntity.ok(attractionQueryService.getDetail(id, parseLang(lang)));
+    }
+
+    private String parseLang(String acceptLanguage) {
+        if (acceptLanguage == null || acceptLanguage.isBlank()) return "ko";
+        return acceptLanguage.split("[,;\\-]")[0].trim().toLowerCase();
     }
 }

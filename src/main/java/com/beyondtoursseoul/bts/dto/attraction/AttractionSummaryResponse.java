@@ -2,6 +2,7 @@ package com.beyondtoursseoul.bts.dto.attraction;
 
 import com.beyondtoursseoul.bts.domain.Attraction;
 import com.beyondtoursseoul.bts.domain.AttractionLocalScore;
+import com.beyondtoursseoul.bts.domain.AttractionTranslation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import org.locationtech.jts.geom.Point;
@@ -43,18 +44,21 @@ public class AttractionSummaryResponse {
     private final BigDecimal score;
 
     public AttractionSummaryResponse(Attraction attraction, AttractionLocalScore score,
-                                     String cat1Name, String cat2Name, String cat3Name) {
+                                     String cat1Name, String cat2Name, String cat3Name,
+                                     AttractionTranslation translation) {
         Point geom = attraction.getGeom();
         if (geom == null) {
             throw new IllegalStateException("관광지 좌표 데이터가 없습니다: id=" + attraction.getId());
         }
         this.id = attraction.getId();
-        this.name = attraction.getName();
+        this.name = translation != null && translation.getName() != null
+                ? translation.getName() : attraction.getName();
         this.thumbnail = attraction.getThumbnail();
         this.cat1Name = cat1Name;
         this.cat2Name = cat2Name;
         this.cat3Name = cat3Name;
-        this.address = attraction.getAddress();
+        this.address = translation != null && translation.getAddress() != null
+                ? translation.getAddress() : attraction.getAddress();
         this.lng = geom.getX();
         this.lat = geom.getY();
         this.score = score != null ? score.getScore() : null;
