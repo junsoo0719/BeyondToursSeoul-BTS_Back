@@ -19,6 +19,15 @@ public class TourCategory {
     @Column(length = 100, nullable = false)
     private String name;
 
+    @Column(name = "name_en", length = 100)
+    private String nameEn;
+
+    @Column(name = "name_zh", length = 100)
+    private String nameZh;
+
+    @Column(name = "name_ja", length = 100)
+    private String nameJa;
+
     @Column(nullable = false)
     private Integer level;
 
@@ -27,5 +36,15 @@ public class TourCategory {
         this.code = code;
         this.name = name;
         this.level = level;
+    }
+
+    public String getLocalizedName(String lang) {
+        if (lang == null) return name;
+        return switch (lang) {
+            case "en" -> nameEn != null ? nameEn : name;
+            case "zh" -> nameZh != null ? nameZh : name;
+            case "ja" -> nameJa != null ? nameJa : name;
+            default -> name;
+        };
     }
 }
