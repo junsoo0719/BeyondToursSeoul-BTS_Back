@@ -17,4 +17,8 @@ public interface AuthService {
     URI getGoogleLoginUrl(String redirectTo, String origin, String referer);
 
     MeResponse me(Jwt jwt);
+
+    MeResponse updateNickname(Jwt jwt, String nickname);
+
+    MeResponse updateProfile(Jwt jwt, String nickname, String localPreference, String preferredLanguage);
 }

@@ -40,9 +40,9 @@ public class UserSavedPlanService {
                 .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
         UserSavedPlan plan = userSavedPlanRepository.findByIdAndUser(planId, user)
                 .orElseThrow(() -> new IllegalArgumentException("저장된 일정을 찾을 수 없습니다."));
-        JsonNode structured;
+        Object structured;
         try {
-            structured = objectMapper.readTree(plan.getStructuredJson());
+            structured = objectMapper.readValue(plan.getStructuredJson(), Object.class);
         } catch (Exception e) {
             structured = objectMapper.createObjectNode();
         }
@@ -56,11 +56,11 @@ public class UserSavedPlanService {
 
     @Transactional
     public SavedPlanSummaryResponse savePlan(SavePlanRequest request, UUID userId) {
-        if (request.getStructured() == null || request.getStructured().isNull()) {
+        if (request.getStructured() == null) {
             throw new IllegalArgumentException("structured 본문이 필요합니다.");
         }
         Profile user = profileRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+                .orElseGet(() -> profileRepository.save(Profile.createForUser(userId)));
         String json;
         try {
             json = objectMapper.writeValueAsString(request.getStructured());
@@ -86,10 +86,11 @@ public class UserSavedPlanService {
         userSavedPlanRepository.delete(plan);
     }
 
-    private String resolveTitle(String requestTitle, JsonNode structured) {
+    private String resolveTitle(String requestTitle, Object structuredObject) {
         if (requestTitle != null && !requestTitle.isBlank()) {
             return requestTitle.trim();
         }
+        JsonNode structured = objectMapper.valueToTree(structuredObject);
         if (structured.has("summary") && structured.get("summary").isObject()) {
             JsonNode summary = structured.get("summary");
             if (summary.has("title") && !summary.get("title").asText("").isBlank()) {

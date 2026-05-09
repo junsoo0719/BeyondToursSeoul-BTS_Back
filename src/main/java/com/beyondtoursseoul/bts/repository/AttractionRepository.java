@@ -2,10 +2,34 @@ package com.beyondtoursseoul.bts.repository;
 
 import com.beyondtoursseoul.bts.domain.Attraction;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 public interface AttractionRepository extends JpaRepository<Attraction, Long> {
 
     List<Attraction> findByDetailFetchedFalseAndExternalIdNotNull();
+
+    /**
+     * 목록용: 해당 일자·시간대에 점수가 있고, 점수 구간을 만족하는 관광지만 조인으로 조회한다.
+     * (전체 attraction findAll 후 메모리 필터링 대신 DB에서 걸러 이그레스·메모리를 줄인다.)
+     */
+    @Query("""
+            select a, s from Attraction a
+            join AttractionLocalScore s on s.id.attractionId = a.id
+            where s.id.date = :date
+              and s.id.timeSlot = :timeSlot
+              and (:minScore is null or s.score >= :minScore)
+              and (:maxScore is null or s.score <= :maxScore)
+            order by s.score desc nulls last
+            """)
+    List<Object[]> findWithLocalScoresForList(
+            @Param("date") LocalDate date,
+            @Param("timeSlot") String timeSlot,
+            @Param("minScore") BigDecimal minScore,
+            @Param("maxScore") BigDecimal maxScore
+    );
 }

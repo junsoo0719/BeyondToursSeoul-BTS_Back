@@ -4,6 +4,8 @@ import com.beyondtoursseoul.bts.dto.auth.AuthResponse;
 import com.beyondtoursseoul.bts.dto.auth.LoginRequest;
 import com.beyondtoursseoul.bts.dto.auth.MeResponse;
 import com.beyondtoursseoul.bts.dto.auth.SignupRequest;
+import com.beyondtoursseoul.bts.dto.auth.UpdateNicknameRequest;
+import com.beyondtoursseoul.bts.dto.auth.UpdateProfileRequest;
 import com.beyondtoursseoul.bts.service.auth.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -89,5 +91,50 @@ public class AuthController {
     @GetMapping("/me")
     public MeResponse me(@AuthenticationPrincipal Jwt jwt) {
         return authService.me(jwt);
+    }
+
+    @Operation(
+            summary = "닉네임 설정/수정",
+            description = "JWT를 기반으로 현재 로그인한 사용자의 profiles.nickname을 저장합니다."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "닉네임 저장 성공"),
+            @ApiResponse(responseCode = "400", description = "닉네임 형식 오류"),
+            @ApiResponse(responseCode = "401", description = "유효하지 않은 토큰 또는 인증 실패")
+    })
+    @PatchMapping("/me/nickname")
+    public MeResponse updateNickname(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestBody UpdateNicknameRequest body
+    ) {
+        if (jwt == null) {
+            throw new IllegalArgumentException("로그인이 필요합니다.");
+        }
+        return authService.updateNickname(jwt, body != null ? body.getNickname() : null);
+    }
+
+    @Operation(
+            summary = "프로필 기본 설정 저장",
+            description = "현재 사용자의 닉네임/여행 페르소나(localPreference)를 저장합니다."
+    )
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "200", description = "프로필 저장 성공"),
+            @ApiResponse(responseCode = "400", description = "입력값 형식 오류"),
+            @ApiResponse(responseCode = "401", description = "유효하지 않은 토큰 또는 인증 실패")
+    })
+    @PatchMapping("/me/profile")
+    public MeResponse updateProfile(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestBody UpdateProfileRequest body
+    ) {
+        if (jwt == null) {
+            throw new IllegalArgumentException("로그인이 필요합니다.");
+        }
+        return authService.updateProfile(
+                jwt,
+                body != null ? body.getNickname() : null,
+                body != null ? body.getLocalPreference() : null,
+                body != null ? body.getPreferredLanguage() : null
+        );
     }
 }

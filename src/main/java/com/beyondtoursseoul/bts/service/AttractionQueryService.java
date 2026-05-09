@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -118,44 +119,49 @@ public class AttractionQueryService {
         LocalDate effectiveDate = date != null ? date
                 : scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
 
-        Map<Long, AttractionLocalScore> scoreMap = scoreRepository
-                .findByIdDateAndIdTimeSlot(effectiveDate, timeSlot)
-                .stream()
-                .collect(Collectors.toMap(s -> s.getId().getAttractionId(), s -> s));
+        List<Object[]> rows = attractionRepository.findWithLocalScoresForList(
+                effectiveDate, timeSlot, minScore, maxScore);
 
         Map<String, TourCategory> categories = categoryRepository.findAll()
                 .stream()
                 .collect(Collectors.toMap(TourCategory::getCode, c -> c));
 
-        List<Attraction> attractions = attractionRepository.findAll().stream()
-                .filter(a -> scoreMap.containsKey(a.getId()))
-                .filter(a -> isInScoreRange(scoreMap.get(a.getId()).getScore(), minScore, maxScore))
+        List<Long> attractionIds = rows.stream()
+                .map(r -> ((Attraction) r[0]).getId())
                 .collect(Collectors.toList());
 
-        Map<Long, AttractionTranslation> translationMap = isKorean(lang) ? Map.of()
-                : translationRepository.findByIdAttractionIdInAndIdLang(
-                        attractions.stream().map(Attraction::getId).collect(Collectors.toList()), lang)
-                  .stream()
-                  .collect(Collectors.toMap(t -> t.getId().getAttractionId(), t -> t));
+        Map<Long, AttractionTranslation> translationMap = isKorean(lang) || attractionIds.isEmpty()
+                ? Map.of()
+                : translationRepository.findByIdAttractionIdInAndIdLang(attractionIds, lang)
+                        .stream()
+                        .collect(Collectors.toMap(t -> t.getId().getAttractionId(), t -> t));
 
-        return attractions.stream()
-                .map(a -> new AttractionSummaryResponse(
-                        a,
-                        scoreMap.get(a.getId()),
-                        resolveCategoryName(categories, a.getCat1(), lang),
-                        resolveCategoryName(categories, a.getCat2(), lang),
-                        resolveCategoryName(categories, a.getCat3(), lang),
-                        translationMap.get(a.getId())
-                ))
-                .sorted(Comparator.comparing(AttractionSummaryResponse::getScore,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .collect(Collectors.toList());
+        List<AttractionSummaryResponse> out = new ArrayList<>(rows.size());
+        for (Object[] row : rows) {
+            Attraction a = (Attraction) row[0];
+            AttractionLocalScore s = (AttractionLocalScore) row[1];
+            out.add(new AttractionSummaryResponse(
+                    a,
+                    s,
+                    resolveCategoryName(categories, a.getCat1(), lang),
+                    resolveCategoryName(categories, a.getCat2(), lang),
+                    resolveCategoryName(categories, a.getCat3(), lang),
+                    translationMap.get(a.getId())
+            ));
+        }
+        return out;
     }
 
     private boolean isInScoreRange(BigDecimal score, BigDecimal min, BigDecimal max) {
-        if (score == null) return min == null && max == null;
-        if (min != null && score.compareTo(min) < 0) return false;
-        if (max != null && score.compareTo(max) > 0) return false;
+        if (score == null) {
+            return min == null && max == null;
+        }
+        if (min != null && score.compareTo(min) < 0) {
+            return false;
+        }
+        if (max != null && score.compareTo(max) > 0) {
+            return false;
+        }
         return true;
     }
 

@@ -20,6 +20,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -243,6 +244,68 @@ public class SupabaseAuthService implements AuthService {
                 profile != null ? profile.getVisitCount() : null,
                 profile != null ? profile.getLocalPreference() : null
         );
+    }
+
+    @Override
+    public MeResponse updateNickname(Jwt jwt, String nickname) {
+        return updateProfile(jwt, nickname, null, null);
+    }
+
+    @Override
+    public MeResponse updateProfile(Jwt jwt, String nickname, String localPreference, String preferredLanguage) {
+        String userId = jwt.getSubject();
+        UUID id = UUID.fromString(userId);
+        Profile profile = profileRepository.findById(id)
+                .orElseGet(() -> Profile.createForUser(id));
+
+        if (nickname != null) {
+            String normalized = nickname.trim();
+            if (normalized.isBlank()) {
+                throw new IllegalArgumentException("닉네임을 입력해 주세요.");
+            }
+            if (normalized.length() > 20) {
+                throw new IllegalArgumentException("닉네임은 20자 이내로 입력해 주세요.");
+            }
+            profile.updateNickname(normalized);
+        }
+
+        if (localPreference != null) {
+            String normalizedPref = localPreference.trim();
+            if (!allowedLocalPreferences().contains(normalizedPref)) {
+                throw new IllegalArgumentException("지원하지 않는 페르소나입니다.");
+            }
+            profile.updateLocalPreference(normalizedPref);
+        }
+
+        if (preferredLanguage != null) {
+            String normalizedLang = preferredLanguage.trim();
+            if (!allowedPreferredLanguages().contains(normalizedLang)) {
+                throw new IllegalArgumentException("지원하지 않는 언어입니다.");
+            }
+            profile.updatePreferredLanguage(normalizedLang);
+        }
+
+        profileRepository.save(profile);
+        return me(jwt);
+    }
+
+    private Set<String> allowedLocalPreferences() {
+        return new HashSet<>(Arrays.asList(
+                "main100",
+                "main70",
+                "balanced",
+                "local70",
+                "local100"
+        ));
+    }
+
+    private Set<String> allowedPreferredLanguages() {
+        return new HashSet<>(Arrays.asList(
+                "한국어",
+                "English",
+                "日本語",
+                "中文"
+        ));
     }
 
     @Getter
