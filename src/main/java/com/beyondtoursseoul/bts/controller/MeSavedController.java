@@ -2,6 +2,7 @@ package com.beyondtoursseoul.bts.controller;
 
 import com.beyondtoursseoul.bts.dto.saved.*;
 import com.beyondtoursseoul.bts.service.saved.UserSavedAttractionService;
+import com.beyondtoursseoul.bts.service.saved.UserSavedEventService;
 import com.beyondtoursseoul.bts.service.saved.UserSavedPlanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -16,13 +17,14 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.UUID;
 
-@Tag(name = "My saves", description = "계정별 저장함 — 관광지·나만의 일정(AI structured)")
+@Tag(name = "My saves", description = "계정별 저장함 — 관광지·행사·나만의 일정(AI structured)")
 @RestController
 @RequestMapping("/api/v1/me/saved")
 @RequiredArgsConstructor
 public class MeSavedController {
 
     private final UserSavedAttractionService userSavedAttractionService;
+    private final UserSavedEventService userSavedEventService;
     private final UserSavedPlanService userSavedPlanService;
 
     @Operation(summary = "저장한 관광지 목록", security = @SecurityRequirement(name = "jwtAuth"))
@@ -46,6 +48,30 @@ public class MeSavedController {
         }
         UUID userId = UUID.fromString(jwt.getSubject());
         boolean saved = userSavedAttractionService.toggleSave(attractionId, userId);
+        return ResponseEntity.ok(new ToggleSaveResponse(saved));
+    }
+
+    @Operation(summary = "저장한 행사 목록", security = @SecurityRequirement(name = "jwtAuth"))
+    @GetMapping("/events")
+    public ResponseEntity<List<SavedEventResponse>> savedEvents(@AuthenticationPrincipal Jwt jwt) {
+        if (jwt == null) {
+            return ResponseEntity.status(401).build();
+        }
+        UUID userId = UUID.fromString(jwt.getSubject());
+        return ResponseEntity.ok(userSavedEventService.listSaved(userId));
+    }
+
+    @Operation(summary = "행사 저장/취소 (토글)", security = @SecurityRequirement(name = "jwtAuth"))
+    @PostMapping("/events/{contentId}")
+    public ResponseEntity<ToggleSaveResponse> toggleEvent(
+            @Parameter(description = "행사 PK (tour_api_event.content_id)")
+            @PathVariable Long contentId,
+            @AuthenticationPrincipal Jwt jwt) {
+        if (jwt == null) {
+            return ResponseEntity.status(401).build();
+        }
+        UUID userId = UUID.fromString(jwt.getSubject());
+        boolean saved = userSavedEventService.toggleSave(contentId, userId);
         return ResponseEntity.ok(new ToggleSaveResponse(saved));
     }
 

@@ -255,6 +255,7 @@ CREATE TABLE public.user_saved_courses (
 -- 개인화 저장함 (Supabase 등에 아래 DDL을 적용한 뒤 API 사용)
 -- - user_saved_courses: 공식 추천 코스(tour_courses) 저장 — 기존
 -- - user_saved_attractions: 관광지(attraction) 즐겨찾기
+-- - user_saved_events: 행사(tour_api_event) 즐겨찾기
 -- - user_saved_plans: AI/챗봇 일정 등 JSON 구조 전체 저장 (프론트 structured 그대로)
 -- ---------------------------------------------------------------------------
 
@@ -270,6 +271,18 @@ CREATE TABLE public.user_saved_attractions (
 );
 CREATE INDEX idx_user_saved_attractions_user_saved_at ON public.user_saved_attractions (user_id, saved_at DESC);
 
+CREATE TABLE public.user_saved_events (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid NOT NULL,
+  event_content_id bigint NOT NULL,
+  saved_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT user_saved_events_pkey PRIMARY KEY (id),
+  CONSTRAINT user_saved_events_user_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE,
+  CONSTRAINT user_saved_events_event_fkey FOREIGN KEY (event_content_id) REFERENCES public.tour_api_event(content_id) ON DELETE CASCADE,
+  CONSTRAINT user_saved_events_user_event_unique UNIQUE (user_id, event_content_id)
+);
+CREATE INDEX idx_user_saved_events_user_saved_at ON public.user_saved_events (user_id, saved_at DESC);
+
 CREATE TABLE public.user_saved_plans (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   user_id uuid NOT NULL,
@@ -284,6 +297,8 @@ CREATE INDEX idx_user_saved_plans_user_saved_at ON public.user_saved_plans (user
 -- API (JWT 필수)
 -- GET    /api/v1/me/saved/attractions
 -- POST   /api/v1/me/saved/attractions/{attractionId}  → { "saved": true|false }
+-- GET    /api/v1/me/saved/events
+-- POST   /api/v1/me/saved/events/{contentId}  → { "saved": true|false }
 -- GET    /api/v1/me/saved/plans
 -- POST   /api/v1/me/saved/plans  body: { "title"?: string, "structured": { ... } }
 -- GET    /api/v1/me/saved/plans/{planId}
