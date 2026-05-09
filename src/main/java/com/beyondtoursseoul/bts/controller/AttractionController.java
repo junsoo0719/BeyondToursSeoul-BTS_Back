@@ -13,6 +13,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -38,9 +39,13 @@ public class AttractionController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @Parameter(description = "시간대. morning/lunch/afternoon/evening/night", example = "afternoon")
             @RequestParam(defaultValue = "afternoon") String timeSlot,
+            @Parameter(description = "찐로컬 지수 최솟값 (0~1). 미입력 시 하한 없음")
+            @RequestParam(required = false) BigDecimal minScore,
+            @Parameter(description = "찐로컬 지수 최댓값 (0~1). 미입력 시 상한 없음")
+            @RequestParam(required = false) BigDecimal maxScore,
             @Parameter(description = "언어 코드. ko(기본)/en/zh/ja")
             @RequestHeader(value = "Accept-Language", required = false, defaultValue = "ko") String lang) {
-        return ResponseEntity.ok(attractionQueryService.getList(date, timeSlot, parseLang(lang)));
+        return ResponseEntity.ok(attractionQueryService.getList(date, timeSlot, minScore, maxScore, parseLang(lang)));
     }
 
     @Operation(
