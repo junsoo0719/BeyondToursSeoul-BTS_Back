@@ -9,6 +9,10 @@ import com.beyondtoursseoul.bts.repository.tour.TourApiEventRepository;
 import com.beyondtoursseoul.bts.repository.tour.TourApiEventTranslationRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.security.core.parameters.P;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +30,52 @@ public class TourQueryService {
 
     private final TourApiEventRepository eventRepository;
     private final TourApiEventTranslationRepository translationRepository;
+
+    @Cacheable(value = "eventsPage", key = "#lang.name() + '_' + #pageable.pageNumber")
+    public Page<TourEventSummaryResponse> getEventListPage(TourLanguage lang, Pageable pageable) {
+        String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+
+        // DB에서 size만큼 가져옴
+        Page<TourApiEvent> eventPage = eventRepository.findValidEventsPage(today, pageable);
+        // 실제 데이터
+        List<TourApiEvent> events = eventPage.getContent();
+
+        if (events.isEmpty()) {
+            return Page.empty(pageable); /// TODO: 무슨뜻
+        }
+
+        // 번역본 타겟
+        List<TourLanguage> targetLanguages = lang == TourLanguage.KOR
+                ? List.of(TourLanguage.KOR) : List.of(lang, TourLanguage.KOR);
+
+        // 번역본 조회 (N + 1 방지 포함)
+        Map<Long, Map<TourLanguage, TourApiEventTranslation>> translationMap = translationRepository
+                .findByEventInAndLanguageIn(events, targetLanguages)
+                .stream()
+                .collect(Collectors.groupingBy(
+                        t -> t.getEvent().getContentId(),
+                        Collectors.toMap(TourApiEventTranslation::getLanguage, t -> t)
+                ));
+
+        // DB 추가 호출 안 하고 메모리 안에서 DTO 조합
+        List<TourEventSummaryResponse> dtoList = events.stream()
+                .map(event -> {
+                    Map<TourLanguage, TourApiEventTranslation> eventTranslations = translationMap.getOrDefault(event.getContentId(), Map.of());
+
+                    TourApiEventTranslation translation = eventTranslations.get(lang);
+                    if (translation == null) {
+                        translation = eventTranslations.get(TourLanguage.KOR);
+                    }
+                    if (translation == null) {
+                        return null;
+                    }
+                    return new TourEventSummaryResponse(event, translation);
+                }).filter(Objects::nonNull).collect(Collectors.toList());
+
+        // 프론트엔드에서 페이징 처리 할 수 있도록 PageImpl로 포장해서 반환
+        return new PageImpl<>(dtoList, pageable, eventPage.getTotalElements());
+    }
+
 
     /**
      * 특정 언어에 맞는 문화행사 리스트를 조회합니다.(종료 날짜가 어제 이후)
@@ -59,7 +109,7 @@ public class TourQueryService {
         return events.stream()
                 .map(event -> {
                     Map<TourLanguage, TourApiEventTranslation> eventTranslations = translationMap.getOrDefault(event.getContentId(), Map.of());
-                    
+
                     // 요청 언어 번역본을 먼저 찾고, 없으면 국문 번역본으로 대체
                     TourApiEventTranslation translation = eventTranslations.get(lang);
                     if (translation == null) {

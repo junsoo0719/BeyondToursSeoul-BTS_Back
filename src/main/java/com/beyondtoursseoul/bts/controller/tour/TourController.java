@@ -6,10 +6,14 @@ import com.beyondtoursseoul.bts.dto.tour.TourApiResponseDto;
 import com.beyondtoursseoul.bts.dto.tour.TourEventDetailResponse;
 import com.beyondtoursseoul.bts.dto.tour.TourEventSummaryResponse;
 import com.beyondtoursseoul.bts.service.tour.TourApiService;
+import com.beyondtoursseoul.bts.service.tour.TourQueryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,7 +26,20 @@ import java.util.List;
 public class TourController {
 
     private final TourApiService tourApiService;
-    private final com.beyondtoursseoul.bts.service.tour.TourQueryService tourQueryService;
+    private final TourQueryService tourQueryService;
+
+    /**
+     * 문화행사 조회 (페이징 처리)
+     */
+    @GetMapping("/events/page")
+    public ResponseEntity<Page<TourEventSummaryResponse>> getEventListPage(
+            @RequestParam(defaultValue = "KOR") TourLanguage lang,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        Pageable pageable = PageRequest.of(page, size);
+
+        return ResponseEntity.ok(tourQueryService.getEventListPage(lang, pageable));
+    }
 
     /**
      * 문화행사 리스트 조회
