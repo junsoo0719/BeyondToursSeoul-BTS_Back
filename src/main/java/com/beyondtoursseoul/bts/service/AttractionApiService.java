@@ -5,7 +5,10 @@ import com.beyondtoursseoul.bts.dto.DetailCommonResponseDto;
 import com.beyondtoursseoul.bts.dto.DetailInfoResponseDto;
 import com.beyondtoursseoul.bts.dto.TourApiResponseDto;
 import com.beyondtoursseoul.bts.dto.TourApiResponseDto.Item;
+import com.beyondtoursseoul.bts.exception.TourApiRateLimitException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.web.client.RestClientResponseException;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -141,7 +144,7 @@ public class AttractionApiService {
                     + "&MobileOS=ETC&MobileApp=BTS&_type=json"
                     + "&contentId=" + contentId;
 
-            String json = restClient.get().uri(url).retrieve().body(String.class);
+            String json = fetchJson(url);
             DetailCommonResponseDto response = objectMapper.readValue(json, DetailCommonResponseDto.class);
 
             if (response == null
@@ -154,6 +157,8 @@ public class AttractionApiService {
             }
             DetailCommonResponseDto.Item item = response.getResponse().getBody().getItems().getItem().get(0);
             return new CommonDetail(blankToNull(item.getOverview()), blankToNull(item.getTel()));
+        } catch (TourApiRateLimitException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("[AttractionApi] detailCommon2 조회 실패 contentId={}: {}", contentId, e.getMessage());
             return new CommonDetail(null, null);
@@ -168,7 +173,7 @@ public class AttractionApiService {
                     + "&contentId=" + contentId
                     + "&contentTypeId=" + contentTypeId;
 
-            String json = restClient.get().uri(url).retrieve().body(String.class);
+            String json = fetchJson(url);
             DetailInfoResponseDto response = objectMapper.readValue(json, DetailInfoResponseDto.class);
 
             if (response == null
@@ -180,10 +185,31 @@ public class AttractionApiService {
                 return null;
             }
             return response.getResponse().getBody().getItems().getItem().get(0).resolveOperatingHours();
+        } catch (TourApiRateLimitException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("[AttractionApi] 운영시간 조회 실패 contentId={}: {}", contentId, e.getMessage());
             return null;
         }
+    }
+
+    private String fetchJson(String url) {
+        String json;
+        try {
+            json = restClient.get().uri(url).retrieve().body(String.class);
+        } catch (RestClientResponseException e) {
+            if (e.getStatusCode().value() == 429) throw new TourApiRateLimitException();
+            throw e;
+        }
+        try {
+            JsonNode resultCode = objectMapper.readTree(json)
+                    .path("response").path("header").path("resultCode");
+            if ("22".equals(resultCode.asText())) throw new TourApiRateLimitException();
+        } catch (TourApiRateLimitException e) {
+            throw e;
+        } catch (Exception ignored) {
+        }
+        return json;
     }
 
     private static String blankToNull(String value) {

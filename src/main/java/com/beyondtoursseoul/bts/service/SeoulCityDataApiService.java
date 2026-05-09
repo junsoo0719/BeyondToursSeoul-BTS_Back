@@ -10,7 +10,7 @@ import org.springframework.web.client.RestClient;
 @Service
 public class SeoulCityDataApiService {
 
-    private static final String SERVICE_NAME = "citydata"; // TODO: 실제 서비스명 최종 확인
+    private static final String SERVICE_NAME = "citydata";
     private final RestClient restClient = RestClient.create();
 
     @Value("${SEOUL_OPEN_API_KEY}")
