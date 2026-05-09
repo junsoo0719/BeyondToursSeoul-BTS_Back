@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -149,6 +150,19 @@ public class AttractionQueryService {
             ));
         }
         return out;
+    }
+
+    private boolean isInScoreRange(BigDecimal score, BigDecimal min, BigDecimal max) {
+        if (score == null) {
+            return min == null && max == null;
+        }
+        if (min != null && score.compareTo(min) < 0) {
+            return false;
+        }
+        if (max != null && score.compareTo(max) > 0) {
+            return false;
+        }
+        return true;
     }
 
     private String resolveCategoryName(Map<String, TourCategory> categories, String code, String lang) {
