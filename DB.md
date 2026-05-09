@@ -1,6 +1,17 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 
+CREATE TABLE public.area_congestion_raw (
+  id bigint NOT NULL DEFAULT nextval('area_congestion_raw_id_seq'::regclass),
+  area_code character varying NOT NULL UNIQUE,
+  area_name character varying NOT NULL,
+  congestion_level character varying NOT NULL,
+  population_time timestamp without time zone NOT NULL,
+  collected_at timestamp with time zone NOT NULL,
+  latitude double precision,
+  longitude double precision,
+  CONSTRAINT area_congestion_raw_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.attraction (
   id bigint NOT NULL DEFAULT nextval('attraction_id_seq'::regclass),
   external_id character varying,
@@ -31,46 +42,15 @@ CREATE TABLE public.attraction_local_score (
   CONSTRAINT attraction_local_score_pkey PRIMARY KEY (attraction_id, date, time_slot),
   CONSTRAINT fk_als_attraction FOREIGN KEY (attraction_id) REFERENCES public.attraction(id)
 );
-CREATE TABLE public.cultural_event (
-  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
-  category_code character varying,
-  category_depth character varying,
-  created_at timestamp with time zone,
-  end_date date,
-  homepage_url character varying,
-  is_free boolean,
-  latitude double precision NOT NULL,
-  longitude double precision NOT NULL,
-  main_img_url character varying,
-  master_cid character varying NOT NULL UNIQUE,
-  start_date date,
-  tel_no character varying,
-  updated_at timestamp with time zone,
-  CONSTRAINT cultural_event_pkey PRIMARY KEY (id)
-);
-CREATE TABLE public.cultural_event_image (
-  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
-  image_url character varying NOT NULL,
-  cultural_event_id bigint,
-  CONSTRAINT cultural_event_image_pkey PRIMARY KEY (id),
-  CONSTRAINT fkitqyf3ra6nvdh19qqnh73ndbs FOREIGN KEY (cultural_event_id) REFERENCES public.cultural_event(id)
-);
-CREATE TABLE public.cultural_event_translation (
-  id bigint NOT NULL DEFAULT nextval('cultural_event_translation_id_seq'::regclass),
-  cultural_event_id bigint,
-  cid character varying NOT NULL,
-  lang_code character varying NOT NULL,
-  title character varying NOT NULL,
-  summary text,
-  post_desc text,
-  address character varying,
-  use_time text,
-  fee_info text,
-  closed_days character varying,
-  traffic_info text,
-  tags text,
-  CONSTRAINT cultural_event_translation_pkey PRIMARY KEY (id),
-  CONSTRAINT cultural_event_translation_cultural_event_id_fkey FOREIGN KEY (cultural_event_id) REFERENCES public.cultural_event(id)
+CREATE TABLE public.attraction_translation (
+  attraction_id bigint NOT NULL,
+  lang character varying NOT NULL,
+  name text,
+  address text,
+  overview text,
+  operating_hours text,
+  CONSTRAINT attraction_translation_pkey PRIMARY KEY (attraction_id, lang),
+  CONSTRAINT attraction_translation_attraction_id_fkey FOREIGN KEY (attraction_id) REFERENCES public.attraction(id)
 );
 CREATE TABLE public.dong_boundary (
   dong_code character varying NOT NULL,
@@ -124,6 +104,24 @@ CREATE TABLE public.lockers (
   weekend_end_time character varying,
   weekend_start_time character varying,
   CONSTRAINT lockers_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.place_enrichment (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  source_type character varying NOT NULL,
+  source_id character varying NOT NULL,
+  name character varying,
+  address character varying,
+  recommended_category character varying NOT NULL DEFAULT '기타'::character varying,
+  recommended_companion_types ARRAY NOT NULL DEFAULT ARRAY['friends'::text],
+  min_group_size integer NOT NULL DEFAULT 1,
+  max_group_size integer NOT NULL DEFAULT 4,
+  score_transport integer NOT NULL DEFAULT 55 CHECK (score_transport >= 0 AND score_transport <= 100),
+  score_car integer NOT NULL DEFAULT 55 CHECK (score_car >= 0 AND score_car <= 100),
+  score_fit numeric NOT NULL DEFAULT 0.350 CHECK (score_fit >= 0::numeric AND score_fit <= 1::numeric),
+  evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT place_enrichment_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.profiles (
   id uuid NOT NULL,
@@ -208,5 +206,86 @@ CREATE TABLE public.tour_category (
   code character varying NOT NULL,
   name character varying NOT NULL,
   level integer NOT NULL,
+  name_en character varying,
+  name_zh character varying,
+  name_ja character varying,
   CONSTRAINT tour_category_pkey PRIMARY KEY (code)
 );
+CREATE TABLE public.tour_course_items (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  ai_comment text,
+  item_type character varying NOT NULL CHECK (item_type::text = ANY (ARRAY['ATTRACTION'::character varying, 'EVENT'::character varying]::text[])),
+  sequence_order integer NOT NULL,
+  attraction_id bigint,
+  course_id bigint NOT NULL,
+  event_id bigint,
+  CONSTRAINT tour_course_items_pkey PRIMARY KEY (id),
+  CONSTRAINT fkho3ueb589vcxh6qri9hd0gfll FOREIGN KEY (attraction_id) REFERENCES public.attraction(id),
+  CONSTRAINT fklxnvbsp615lv9nq52wo0jujn5 FOREIGN KEY (course_id) REFERENCES public.tour_courses(id),
+  CONSTRAINT fki9mb3c9soa8qsggtxdv03n5hu FOREIGN KEY (event_id) REFERENCES public.tour_api_event(content_id)
+);
+CREATE TABLE public.tour_course_translations (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  hashtags character varying,
+  language character varying NOT NULL CHECK (language::text = ANY (ARRAY['KOR'::character varying, 'ENG'::character varying, 'JPN'::character varying, 'CHS'::character varying, 'CHT'::character varying]::text[])),
+  title character varying NOT NULL,
+  course_id bigint NOT NULL,
+  CONSTRAINT tour_course_translations_pkey PRIMARY KEY (id),
+  CONSTRAINT fkbis93f7dgawlphjosb5mh8cfk FOREIGN KEY (course_id) REFERENCES public.tour_courses(id)
+);
+CREATE TABLE public.tour_courses (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  created_at timestamp without time zone,
+  featured_image character varying,
+  hashtags character varying,
+  title character varying NOT NULL,
+  CONSTRAINT tour_courses_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.user_saved_courses (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  saved_at timestamp without time zone,
+  course_id bigint NOT NULL,
+  user_id uuid NOT NULL,
+  CONSTRAINT user_saved_courses_pkey PRIMARY KEY (id),
+  CONSTRAINT fkepx2ib9v2ro1banjvs29y6oup FOREIGN KEY (course_id) REFERENCES public.tour_courses(id),
+  CONSTRAINT fkilwyad89p8e78y34uxvrbd6oy FOREIGN KEY (user_id) REFERENCES public.profiles(id)
+);
+
+-- ---------------------------------------------------------------------------
+-- 개인화 저장함 (Supabase 등에 아래 DDL을 적용한 뒤 API 사용)
+-- - user_saved_courses: 공식 추천 코스(tour_courses) 저장 — 기존
+-- - user_saved_attractions: 관광지(attraction) 즐겨찾기
+-- - user_saved_plans: AI/챗봇 일정 등 JSON 구조 전체 저장 (프론트 structured 그대로)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE public.user_saved_attractions (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid NOT NULL,
+  attraction_id bigint NOT NULL,
+  saved_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT user_saved_attractions_pkey PRIMARY KEY (id),
+  CONSTRAINT user_saved_attractions_user_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE,
+  CONSTRAINT user_saved_attractions_attraction_fkey FOREIGN KEY (attraction_id) REFERENCES public.attraction(id) ON DELETE CASCADE,
+  CONSTRAINT user_saved_attractions_user_attraction_unique UNIQUE (user_id, attraction_id)
+);
+CREATE INDEX idx_user_saved_attractions_user_saved_at ON public.user_saved_attractions (user_id, saved_at DESC);
+
+CREATE TABLE public.user_saved_plans (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  user_id uuid NOT NULL,
+  title character varying(500),
+  structured_json text NOT NULL,
+  saved_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT user_saved_plans_pkey PRIMARY KEY (id),
+  CONSTRAINT user_saved_plans_user_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_user_saved_plans_user_saved_at ON public.user_saved_plans (user_id, saved_at DESC);
+
+-- API (JWT 필수)
+-- GET    /api/v1/me/saved/attractions
+-- POST   /api/v1/me/saved/attractions/{attractionId}  → { "saved": true|false }
+-- GET    /api/v1/me/saved/plans
+-- POST   /api/v1/me/saved/plans  body: { "title"?: string, "structured": { ... } }
+-- GET    /api/v1/me/saved/plans/{planId}
+-- DELETE /api/v1/me/saved/plans/{planId}
+-- 공식 코스 저장(기존): POST /api/v1/courses/{courseId}/save , GET /api/v1/courses/saved

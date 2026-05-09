@@ -2,6 +2,7 @@ package com.beyondtoursseoul.bts.controller.locker;
 
 import com.beyondtoursseoul.bts.dto.locker.LockerApiResponseDto;
 import com.beyondtoursseoul.bts.dto.locker.LockerDetailResponse;
+import com.beyondtoursseoul.bts.dto.locker.LockerNearestEntryResponse;
 import com.beyondtoursseoul.bts.dto.locker.LockerSummaryResponse;
 import com.beyondtoursseoul.bts.service.locker.LockerService;
 import com.beyondtoursseoul.bts.service.translation.LockerTranslationService;
@@ -37,6 +38,20 @@ public class LockerController {
             @Parameter(description = "언어 설정 (KOR, ENG, JPN, CHS, CHT)", example = "KOR")
             @RequestParam(defaultValue = "KOR") TourLanguage lang) {
         return ResponseEntity.ok(lockerService.getLockerList(lang));
+    }
+
+    @Operation(summary = "좌표 기준 가까운 물품보관함", description = "직선거리 기준으로 가장 가까운 보관함을 반환합니다.")
+    @GetMapping("/nearest")
+    public ResponseEntity<List<LockerNearestEntryResponse>> getNearestLockers(
+            @Parameter(description = "위도 (WGS84)", example = "37.5665")
+            @RequestParam double latitude,
+            @Parameter(description = "경도 (WGS84)", example = "126.9780")
+            @RequestParam double longitude,
+            @Parameter(description = "최대 개수 (1~20)", example = "1")
+            @RequestParam(defaultValue = "1") int limit,
+            @Parameter(description = "언어 설정 (KOR, ENG, JPN, CHS, CHT)", example = "KOR")
+            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
+        return ResponseEntity.ok(lockerService.findNearestLockers(latitude, longitude, limit, lang));
     }
 
     /**

@@ -1,13 +1,14 @@
 package com.beyondtoursseoul.bts.dto;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
+
+import java.util.Map;
 
 @Getter
 @AllArgsConstructor
 public class AiChatResponse {
     private String answer;
-    private JsonNode structured;
+    private Map<String, Object> structured;
     private String model;
 }

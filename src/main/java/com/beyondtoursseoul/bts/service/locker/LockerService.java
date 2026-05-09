@@ -5,6 +5,7 @@ import com.beyondtoursseoul.bts.domain.locker.LockerTranslation;
 import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.locker.LockerApiResponseDto;
 import com.beyondtoursseoul.bts.dto.locker.LockerDetailResponse;
+import com.beyondtoursseoul.bts.dto.locker.LockerNearestEntryResponse;
 import com.beyondtoursseoul.bts.dto.locker.LockerSummaryResponse;
 import com.beyondtoursseoul.bts.repository.locker.LockerRepository;
 import com.beyondtoursseoul.bts.service.translation.LockerTranslationService;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
 
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +59,40 @@ public class LockerService {
                 })
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 주어진 좌표에서 가장 가까운 물품보관함(직선거리) 목록. 좌표 없는 행은 제외.
+     */
+    @Transactional(readOnly = true)
+    public List<LockerNearestEntryResponse> findNearestLockers(
+            double latitude,
+            double longitude,
+            int limit,
+            TourLanguage lang
+    ) {
+        int cap = Math.min(Math.max(limit, 1), 20);
+        List<LockerSummaryResponse> all = getLockerList(lang);
+        return all.stream()
+                .filter(s -> s.getLatitude() != null && s.getLongitude() != null)
+                .map(s -> {
+                    double km = haversineKm(latitude, longitude, s.getLatitude(), s.getLongitude());
+                    return new LockerNearestEntryResponse(s, km * 1000.0);
+                })
+                .sorted(Comparator.comparingInt(LockerNearestEntryResponse::getDistanceMeters))
+                .limit(cap)
+                .collect(Collectors.toList());
+    }
+
+    private static double haversineKm(double lat1, double lon1, double lat2, double lon2) {
+        final double r = 6371.0;
+        double dLat = Math.toRadians(lat2 - lat1);
+        double dLon = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return r * c;
     }
 
     /**

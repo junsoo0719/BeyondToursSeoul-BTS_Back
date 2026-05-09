@@ -39,6 +39,7 @@ public class SecurityConfig {
 
                         // 2. 인증이 필수인 API (코스 저장, 조회 등)
                         .requestMatchers("/api/v1/auth/me").authenticated()
+                        .requestMatchers("/api/v1/me/**").authenticated()
                         .requestMatchers("/api/v1/courses/saved").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/v1/courses/*/save").authenticated()
 
