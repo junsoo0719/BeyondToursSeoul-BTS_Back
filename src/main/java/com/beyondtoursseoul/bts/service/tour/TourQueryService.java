@@ -26,7 +26,7 @@ public class TourQueryService {
     private final TourApiEventTranslationRepository translationRepository;
 
     /**
-     * 특정 언어에 맞는 문화행사 리스트를 조회합니다.
+     * 특정 언어에 맞는 문화행사 리스트를 조회합니다.(종료 날짜가 어제 이후)
      */
     public List<TourEventSummaryResponse> getEventList(TourLanguage lang) {
         String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
