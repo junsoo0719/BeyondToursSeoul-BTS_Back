@@ -38,4 +38,17 @@ public class Profile {
     @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
 
+    /**
+     * auth.users에만 있고 profiles 행이 아직 없는 계정용 (저장함 등 첫 API에서 보강).
+     */
+    public static Profile createForUser(UUID id) {
+        Profile p = new Profile();
+        OffsetDateTime now = OffsetDateTime.now();
+        p.id = id;
+        p.visitCount = 0;
+        p.createdAt = now;
+        p.updatedAt = now;
+        return p;
+    }
+
 }

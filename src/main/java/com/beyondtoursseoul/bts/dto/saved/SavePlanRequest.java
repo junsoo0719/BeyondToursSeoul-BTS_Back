@@ -1,6 +1,5 @@
 package com.beyondtoursseoul.bts.dto.saved;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import lombok.Setter;
@@ -14,5 +13,5 @@ public class SavePlanRequest {
     private String title;
 
     @Schema(description = "일정 본문: { days, summary, budget } 형태 권장")
-    private JsonNode structured;
+    private Object structured;
 }
