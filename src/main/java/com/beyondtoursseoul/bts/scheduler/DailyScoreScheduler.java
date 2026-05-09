@@ -7,6 +7,8 @@ import com.beyondtoursseoul.bts.service.score.LocalScoreCalculateService;
 import com.beyondtoursseoul.bts.service.score.PopulationCollectService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -23,6 +25,10 @@ public class DailyScoreScheduler {
     private final AttractionScoreService attractionScoreService;
     private final DongLocalScoreRepository localScoreRepository;
 
+    @Caching(evict = {
+            @CacheEvict(value = "attractions", allEntries = true),
+            @CacheEvict(value = "attractionsPage", allEntries = true)
+    })
     @Scheduled(cron = "0 0 1 * * *", zone = "Asia/Seoul")
     public void run() {
         log.info("[DailyScoreScheduler] 시작");

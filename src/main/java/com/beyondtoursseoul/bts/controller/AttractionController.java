@@ -12,6 +12,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -28,7 +31,7 @@ public class AttractionController {
     @Operation(
             summary = "관광지 목록 조회",
             description = "찐로컬 지수 score 내림차순으로 관광지 목록을 반환합니다. " +
-                          "date 미입력 시 가장 최근 점수 날짜를 자동으로 사용합니다."
+                    "date 미입력 시 가장 최근 점수 날짜를 자동으로 사용합니다."
     )
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "조회 성공")
@@ -48,11 +51,36 @@ public class AttractionController {
         return ResponseEntity.ok(attractionQueryService.getList(date, timeSlot, minScore, maxScore, parseLang(lang)));
     }
 
+
+    @Operation(
+            summary = "관광지 목록 페이지네이션 조회",
+            description = "찐로컬 지수 score 내림차순으로 관광지 목록을 10개씩 페이지 단위로 반환합니다."
+    )
+    @GetMapping("/page")
+    public ResponseEntity<Page<AttractionSummaryResponse>> getListPage(
+            @Parameter(description = "조회 날짜 (yyyy-MM-dd). 미입력 시 DB 최신 날짜 사용")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @Parameter(description = "시간대. morning/lunch/afternoon/evening/night", example = "afternoon")
+            @RequestParam(defaultValue = "afternoon") String timeSlot,
+            @Parameter(description = "찐로컬 지수 최솟값 (0~1). 미입력 시 하한 없음")
+            @RequestParam(required = false) BigDecimal minScore,
+            @Parameter(description = "찐로컬 지수 최댓값 (0~1). 미입력 시 상한 없음")
+            @RequestParam(required = false) BigDecimal maxScore,
+            @Parameter(description = "언어 코드. ko(기본)/en/zh/ja")
+            @RequestHeader(value = "Accept-Language", required = false, defaultValue = "ko") String lang,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "10") int size) {
+
+        Pageable pageable = PageRequest.of(page, size);
+        return ResponseEntity.ok(attractionQueryService.getListPage(date, timeSlot, minScore, maxScore, parseLang(lang), pageable));
+    }
+
+
     @Operation(
             summary = "관광지 상세 조회",
             description = "관광지 상세 정보를 반환합니다. " +
-                          "overview·tel·operatingHours는 첫 요청 시 TourAPI에서 가져와 DB에 저장하며, " +
-                          "이후 요청부터는 캐시된 값을 반환합니다."
+                    "overview·tel·operatingHours는 첫 요청 시 TourAPI에서 가져와 DB에 저장하며, " +
+                    "이후 요청부터는 캐시된 값을 반환합니다."
     )
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "조회 성공"),

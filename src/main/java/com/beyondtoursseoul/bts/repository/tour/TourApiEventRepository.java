@@ -2,6 +2,8 @@ package com.beyondtoursseoul.bts.repository.tour;
 
 import com.beyondtoursseoul.bts.domain.tour.TourApiEvent;
 import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -25,4 +27,10 @@ public interface TourApiEventRepository extends JpaRepository<TourApiEvent, Long
      */
     @Query("SELECT e FROM TourApiEvent e WHERE e.eventEndDate >= :today")
     List<TourApiEvent> findValidEvents(@Param("today") String today);
+
+    /**
+     * 페이징 적용 리스트 조회
+     */
+    @Query("SELECT e FROM TourApiEvent e WHERE e.eventEndDate >= :today")
+    Page<TourApiEvent> findValidEventsPage(@Param("today") String today, Pageable pageable);
 }
