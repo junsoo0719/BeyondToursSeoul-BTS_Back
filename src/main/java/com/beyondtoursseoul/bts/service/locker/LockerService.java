@@ -10,7 +10,10 @@ import com.beyondtoursseoul.bts.dto.locker.LockerSummaryResponse;
 import com.beyondtoursseoul.bts.repository.locker.LockerRepository;
 import com.beyondtoursseoul.bts.service.translation.LockerTranslationService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
@@ -35,6 +38,9 @@ public class LockerService {
     private final RestClient restClient;
     private final LockerRepository lockerRepository;
     private final LockerTranslationService lockerTranslationService;
+    
+    // 내부 호출 시 캐시 우회(Self-Invocation)를 막기 위한 자기 자신 주입
+    private LockerService self;
 
     // api값 가져옴
     @Value("${seoul.open-api.key}")
@@ -46,13 +52,23 @@ public class LockerService {
         this.lockerTranslationService = lockerTranslationService;
     }
 
+    // findNearestLockers() 메서드 안에서 같은 클래스에 있는 getLockerList()를 직접 호출하면,
+    // 스프링의 AOP(프록시)를 거치지 않게 되어 @Cacheable 어노테이션이 무시됨.
+    // 해결하기 위해 @Autowired @Lazy를 사용하여 자기 자신을 프록시 객체로 주입받아 호출하도록 구조를 수정
+    @Autowired
+    public void setSelf(@Lazy LockerService self) {
+        this.self = self;
+    }
+
     /**
      * 특정 언어에 맞는 물품보관함 리스트를 조회합니다. (지도/핀용)
      */
+    @Cacheable(value = "lockers", key = "#lang")
     @Transactional(readOnly = true)
     public List<LockerSummaryResponse> getLockerList(TourLanguage lang) {
         String langCode = lang.getLockerLangCode();
-        return lockerRepository.findAll().stream()
+        // N+1 문제 해결을 위해 findAll() 대신 findAllWithTranslations() 사용
+        return lockerRepository.findAllWithTranslations().stream()
                 .map(locker -> {
                     LockerTranslation translation = findTranslation(locker, langCode);
                     return translation != null ? new LockerSummaryResponse(locker, translation) : null;
@@ -72,7 +88,8 @@ public class LockerService {
             TourLanguage lang
     ) {
         int cap = Math.min(Math.max(limit, 1), 20);
-        List<LockerSummaryResponse> all = getLockerList(lang);
+        // 내부 메서드 직접 호출 시 캐시가 무시되므로(Self-Invocation), 프록시 객체(self)를 통해 호출
+        List<LockerSummaryResponse> all = self.getLockerList(lang);
         return all.stream()
                 .filter(s -> s.getLatitude() != null && s.getLongitude() != null)
                 .map(s -> {
@@ -213,8 +230,7 @@ public class LockerService {
                         .totalCnt(item.getTotalCount())
                         .weekdayStartTime(item.getWeekdayStartTime())
                         .weekdayEndTime(item.getWeekdayEndTime())
-                        .weekendStartTime(item.getWeekendStartTime())
-                        .weekendEndTime(item.getWeekendEndTime())
+                        .weekendStartTime(item.getWeekendEndTime())
                         .addChargeUnit(addChargeUnit)
                         .build();
                 log.info("새로만들어진 id: {}", item.getLockerId());
