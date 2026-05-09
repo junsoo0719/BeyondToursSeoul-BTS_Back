@@ -58,6 +58,9 @@ public class TourApiEvent {
     @Column(name = "last_sync_time")
     private LocalDateTime lastSyncTime; // 우리 시스템의 마지막 동기화 일시
 
+    @Column(name = "last_fetch_attempt_time")
+    private LocalDateTime lastFetchAttemptTime; // 최근 API 조회(패치) 시도 일시
+
     @OneToMany(mappedBy = "event", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     private List<TourApiEventTranslation> translations = new ArrayList<>();

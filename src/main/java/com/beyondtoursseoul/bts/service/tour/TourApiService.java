@@ -101,6 +101,9 @@ public class TourApiService {
             boolean hasTranslation = translationRepository.existsByEventAndLanguage(existingEvent, lang);
             if (hasTranslation) {
                 log.info("[Sync Skip] 변경사항 없음: contentId={}, lang={}", dto.getContentId(), lang);
+                // 변경이 없더라도 패치 시도 시간은 갱신해줍니다.
+                existingEvent.setLastFetchAttemptTime(LocalDateTime.now());
+                eventRepository.save(existingEvent);
                 return;
             }
         }
@@ -467,6 +470,7 @@ public class TourApiService {
         event.setEventEndDate(dto.getEventEndDate());
         event.setModifiedTime(dto.getModifiedTime());
         event.setLastSyncTime(LocalDateTime.now());
+        event.setLastFetchAttemptTime(LocalDateTime.now());
     }
 
 }
