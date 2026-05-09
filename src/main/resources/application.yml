@@ -29,6 +29,11 @@ spring:
   config:
     import: optional:file:.env[.properties] # .env파일에서 환경변수 로드
 
+  cache:
+    type: caffeine
+    caffeine:
+      spec: expireAfterWrite=2h
+    # 작성된지 2시간 후 자동 삭제로 임의 설정 (시간은 h, m, s 단위 사용하가능)
 server:
   address: 0.0.0.0
   port: ${PORT:8080}

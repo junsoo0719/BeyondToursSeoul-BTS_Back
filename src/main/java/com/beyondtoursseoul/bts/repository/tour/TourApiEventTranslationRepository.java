@@ -6,6 +6,7 @@ import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -15,4 +16,7 @@ public interface TourApiEventTranslationRepository extends JpaRepository<TourApi
     Optional<TourApiEventTranslation> findByEventAndLanguage(TourApiEvent event, TourLanguage language);
 
     boolean existsByEventAndLanguage(TourApiEvent event, TourLanguage language);
+
+    // IN 절을 이용한 다중 조회 (N+1 문제 해결용)
+    List<TourApiEventTranslation> findByEventInAndLanguageIn(List<TourApiEvent> events, List<TourLanguage> languages);
 }
