@@ -12,6 +12,9 @@ import com.beyondtoursseoul.bts.repository.AttractionTranslationRepository;
 import com.beyondtoursseoul.bts.repository.TourCategoryRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +35,80 @@ public class AttractionQueryService {
     private final TourCategoryRepository categoryRepository;
     private final AttractionApiService attractionApiService;
     private final AttractionTranslationRepository translationRepository;
+
+
+    // 👇 [신규 추가] 페이지 번호를 포함하여 완벽하게 파라미터별로 독립된 캐시 생성
+    @Cacheable(value = "attractionsPage", key = "{#date, #timeSlot, #minScore, #maxScore, #lang, #pageable.pageNumber}")
+    public Page<AttractionSummaryResponse> getListPage(LocalDate date, String timeSlot,
+                                                       BigDecimal minScore, BigDecimal maxScore,
+                                                       String lang, Pageable pageable) {
+
+        LocalDate effectiveDate = date != null ? date
+                : scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
+
+        // 점수 리스트
+        List<AttractionLocalScore> scoreList = scoreRepository
+                .findByIdDateAndIdTimeSlot(effectiveDate, timeSlot);
+
+        // 점수 범위로 필터링 후, 내림차순 정렬하여 전체 '관광지 ID 풀(Pool)' 만들기
+        List<AttractionLocalScore> filteredScores = scoreList.stream()
+                .filter(s -> isInScoreRange(s.getScore(), minScore, maxScore))
+                .sorted(Comparator.comparing(AttractionLocalScore::getScore, Comparator.nullsLast(Comparator.reverseOrder())))
+                .collect(Collectors.toList());
+
+        // 페이지네이션 정보에 맞게 딱 10개(요청 size)의 데이터만 자름
+        int start = (int) pageable.getOffset();
+        int end = Math.min((start + pageable.getPageSize()), filteredScores.size());
+
+        if (start >= filteredScores.size()) {
+            return Page.empty(pageable); // 범위를 벗어나면 빈 페이지 반환
+        }
+
+        // 10개의 점수 객체와 ID 리스트만 추출
+        List<AttractionLocalScore> pageScores = filteredScores.subList(start, end);
+        List<Long> pageIds = pageScores.stream()
+                .map(s -> s.getId().getAttractionId())
+                .collect(Collectors.toList());
+
+        // DB에는 딱 10개의 ID만 던져서 무거운 관광지 객체 10개만 가져옴
+        List<Attraction> attractions = attractionRepository.findAllById(pageIds);
+
+        // 5. 카테고리 정보 및 번역 정보 매핑 (번역 정보도 딱 10개만 IN 절로 싹쓸이!)
+        Map<String, TourCategory> categories = categoryRepository.findAll()
+                .stream()
+                .collect(Collectors.toMap(TourCategory::getCode, c -> c));
+
+        Map<Long, AttractionTranslation> translationMap = isKorean(lang) ? Map.of()
+                : translationRepository.findByIdAttractionIdInAndIdLang(pageIds, lang)
+                  .stream()
+                  .collect(Collectors.toMap(t -> t.getId().getAttractionId(), t -> t));
+
+        Map<Long, AttractionLocalScore> scoreMap = pageScores.stream()
+                .collect(Collectors.toMap(s -> s.getId().getAttractionId(), s -> s));
+
+        // DB에서 IN 절로 가져오면 순서가 뒤섞일 수 있으므로, 재정렬을 위해 Map 구조 활용
+        Map<Long, Attraction> attractionMap = attractions.stream()
+                .collect(Collectors.toMap(Attraction::getId, a -> a));
+
+        // 점수순으로 정렬되어 있는 pageIds 순서 그대로 DTO 조립
+        List<AttractionSummaryResponse> dtoList = pageIds.stream()
+                .filter(attractionMap::containsKey) // 안전 장치
+                .map(id -> {
+                    Attraction a = attractionMap.get(id);
+                    return new AttractionSummaryResponse(
+                            a,
+                            scoreMap.get(id),
+                            resolveCategoryName(categories, a.getCat1(), lang),
+                            resolveCategoryName(categories, a.getCat2(), lang),
+                            resolveCategoryName(categories, a.getCat3(), lang),
+                            translationMap.get(id)
+                    );
+                })
+                .collect(Collectors.toList());
+
+        return new PageImpl<>(dtoList, pageable, filteredScores.size());
+    }
+
 
     // 특별히 key를 적지 않으면 메서드 파라미터 전체를 조합해 자동으로 고유 키를 생성해줌
     @Cacheable(value = "attractions")

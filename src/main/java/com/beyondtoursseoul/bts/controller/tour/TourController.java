@@ -31,10 +31,14 @@ public class TourController {
     /**
      * 문화행사 조회 (페이징 처리)
      */
+    @Operation(summary = "문화행사 리스트 조회 (페이지네이션)", description = "특정 언어에 맞는 종료되지 않은 문화행사 목록을 페이지 단위로 조회합니다. (기본값: 한 페이지당 10개)")
     @GetMapping("/events/page")
     public ResponseEntity<Page<TourEventSummaryResponse>> getEventListPage(
+            @Parameter(description = "언어 코드 (KOR, ENG, JPN, CHS, CHT)", example = "KOR")
             @RequestParam(defaultValue = "KOR") TourLanguage lang,
+            @Parameter(description = "페이지 번호 (0부터 시작)", example = "0")
             @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "한 페이지당 데이터 개수", example = "10")
             @RequestParam(defaultValue = "10") int size) {
         Pageable pageable = PageRequest.of(page, size);
 
