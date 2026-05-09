@@ -5,6 +5,7 @@ import com.beyondtoursseoul.bts.service.tour.TourApiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -21,7 +22,10 @@ public class TourSyncScheduler {
      * * cron = "초 분 시 일 월 요일"
      */
     // DB 업데이트 로직 실행될 때 'events' 캐시의 모든 데이터 삭제
-    @CacheEvict(value = "events", allEntries = true)
+    @Caching(evict = {
+            @CacheEvict(value = "events", allEntries = true),
+            @CacheEvict(value = "eventsPage", allEntries = true)
+    })
     @Scheduled(cron = "0 0 5 * * *")
     public void scheduleTourDataSync() {
         log.info("[Scheduler] 정기 관광공사 데이터 동기화를 시작합니다.");
