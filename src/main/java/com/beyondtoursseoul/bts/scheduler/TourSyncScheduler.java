@@ -4,6 +4,7 @@ import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.service.tour.TourApiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -19,6 +20,8 @@ public class TourSyncScheduler {
      * 국문 데이터를 먼저 갱신한 후, 다국어 데이터를 순차적으로 업데이트합니다.
      * * cron = "초 분 시 일 월 요일"
      */
+    // DB 업데이트 로직 실행될 때 'events' 캐시의 모든 데이터 삭제
+    @CacheEvict(value = "events", allEntries = true)
     @Scheduled(cron = "0 0 5 * * *")
     public void scheduleTourDataSync() {
         log.info("[Scheduler] 정기 관광공사 데이터 동기화를 시작합니다.");

@@ -11,6 +11,7 @@ import com.beyondtoursseoul.bts.repository.AttractionRepository;
 import com.beyondtoursseoul.bts.repository.AttractionTranslationRepository;
 import com.beyondtoursseoul.bts.repository.TourCategoryRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +33,8 @@ public class AttractionQueryService {
     private final AttractionApiService attractionApiService;
     private final AttractionTranslationRepository translationRepository;
 
+    // 특별히 key를 적지 않으면 메서드 파라미터 전체를 조합해 자동으로 고유 키를 생성해줌
+    @Cacheable(value = "attractions")
     public List<AttractionSummaryResponse> getList(LocalDate date, String timeSlot,
                                                     BigDecimal minScore, BigDecimal maxScore,
                                                     String lang) {

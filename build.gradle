@@ -44,6 +44,11 @@ dependencies {
 	// IQR/median 계산 (repeat 지표)
 	implementation 'org.apache.commons:commons-math3:3.6.1'
 
+	// 캐시 스타터
+	implementation 'org.springframework.boot:spring-boot-starter-cache'
+	// 카페인캐시
+	implementation 'com.github.ben-manes.caffeine:caffeine'
+
 }
 
 tasks.named('test') {
