@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -40,5 +41,20 @@ public class GlobalExceptionHandler {
         body.put("message", e.getMessage());
         body.put("path", request.getRequestURI());
         return ResponseEntity.internalServerError().body(body);
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleResponseStatusException(
+            ResponseStatusException e,
+            HttpServletRequest request
+    ) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", Instant.now());
+        body.put("status", e.getStatusCode().value());
+        body.put("error", e.getStatusCode().toString());
+        body.put("message", e.getReason());
+        body.put("path", request.getRequestURI());
+
+        return ResponseEntity.status(e.getStatusCode()).body(body);
     }
 }
