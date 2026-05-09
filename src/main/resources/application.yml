@@ -12,7 +12,8 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate
-    show-sql: true
+    # SHOW_SQL 환경변수가 있으면 그 값을, 없으면 기본값인 true 사용
+    show-sql: ${SHOW_SQL:true}
     properties:
       hibernate:
         format_sql: true
@@ -43,8 +44,9 @@ frontend:
 
 logging:
   level:
-    org.hibernate.SQL: debug
-    org.hibernate.type.descriptor.sql: trace
+    # LOG_SQL_LEVEL 환경변수가 있으면 그 값을, 없으면 기본값인 debug/trace 사용
+    org.hibernate.SQL: ${LOG_SQL_LEVEL:debug}
+    org.hibernate.type.descriptor.sql: ${LOG_SQL_LEVEL:trace}
 
 seoul:
   open-api:
