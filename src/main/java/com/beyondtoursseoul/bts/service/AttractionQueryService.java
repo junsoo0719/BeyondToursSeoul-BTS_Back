@@ -32,7 +32,9 @@ public class AttractionQueryService {
     private final AttractionApiService attractionApiService;
     private final AttractionTranslationRepository translationRepository;
 
-    public List<AttractionSummaryResponse> getList(LocalDate date, String timeSlot, String lang) {
+    public List<AttractionSummaryResponse> getList(LocalDate date, String timeSlot,
+                                                    BigDecimal minScore, BigDecimal maxScore,
+                                                    String lang) {
         LocalDate effectiveDate = date != null ? date
                 : scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
 
@@ -47,6 +49,7 @@ public class AttractionQueryService {
 
         List<Attraction> attractions = attractionRepository.findAll().stream()
                 .filter(a -> scoreMap.containsKey(a.getId()))
+                .filter(a -> isInScoreRange(scoreMap.get(a.getId()).getScore(), minScore, maxScore))
                 .collect(Collectors.toList());
 
         Map<Long, AttractionTranslation> translationMap = isKorean(lang) ? Map.of()
@@ -67,6 +70,13 @@ public class AttractionQueryService {
                 .sorted(Comparator.comparing(AttractionSummaryResponse::getScore,
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .collect(Collectors.toList());
+    }
+
+    private boolean isInScoreRange(BigDecimal score, BigDecimal min, BigDecimal max) {
+        if (score == null) return min == null && max == null;
+        if (min != null && score.compareTo(min) < 0) return false;
+        if (max != null && score.compareTo(max) > 0) return false;
+        return true;
     }
 
     private String resolveCategoryName(Map<String, TourCategory> categories, String code, String lang) {

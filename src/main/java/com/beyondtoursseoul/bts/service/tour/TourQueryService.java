@@ -11,7 +11,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -23,10 +26,12 @@ public class TourQueryService {
     private final TourApiEventTranslationRepository translationRepository;
 
     /**
-     * 특정 언어에 맞는 문화행사 리스트를 조회합니다.
+     * 특정 언어에 맞는 문화행사 리스트를 조회합니다.(종료 날짜가 어제 이후)
      */
     public List<TourEventSummaryResponse> getEventList(TourLanguage lang) {
-        return eventRepository.findAll().stream()
+        String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+
+        return eventRepository.findValidEvents(today).stream()
                 .map(event -> {
                     // 요청한 언어의 번역본 조회, 없으면 국문(KOR)으로 대체
                     TourApiEventTranslation translation = translationRepository
@@ -37,7 +42,7 @@ public class TourQueryService {
                     if (translation == null) return null;
                     return new TourEventSummaryResponse(event, translation);
                 })
-                .filter(res -> res != null)
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
     }
 
