@@ -51,4 +51,14 @@ public class Profile {
         return p;
     }
 
+    public void updateNickname(String nickname) {
+        this.nickname = nickname;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    public void updateLocalPreference(String localPreference) {
+        this.localPreference = localPreference;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
 }
