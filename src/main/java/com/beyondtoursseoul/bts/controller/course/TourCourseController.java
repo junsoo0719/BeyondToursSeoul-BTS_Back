@@ -3,6 +3,7 @@ package com.beyondtoursseoul.bts.controller.course;
 import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.course.TourCourseDetailResponse;
 import com.beyondtoursseoul.bts.dto.course.TourCourseSummaryResponse;
+import com.beyondtoursseoul.bts.dto.saved.ToggleSaveResponse;
 import com.beyondtoursseoul.bts.service.course.TourCourseService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -82,18 +83,17 @@ public class TourCourseController {
             security = @SecurityRequirement(name = "jwtAuth")
     )
     @PostMapping("/{courseId}/save")
-    public ResponseEntity<String> toggleSaveCourse(
+    public ResponseEntity<?> toggleSaveCourse(
             @Parameter(description = "코스 ID", example = "1")
             @PathVariable Long courseId,
             @AuthenticationPrincipal Jwt jwt) {
 
         if (jwt == null) {
-            return ResponseEntity.status(401).body("로그인이 필요한 서비스입니다.");
+            return ResponseEntity.status(401).build();
         }
 
         UUID userId = UUID.fromString(jwt.getSubject());
-        boolean isSaved = tourCourseService.toggleSaveCourse(courseId, userId);
-        
-        return ResponseEntity.ok(isSaved ? "코스가 저장되었습니다." : "코스 저장이 취소되었습니다.");
+        boolean saved = tourCourseService.toggleSaveCourse(courseId, userId);
+        return ResponseEntity.ok(new ToggleSaveResponse(saved));
     }
 }

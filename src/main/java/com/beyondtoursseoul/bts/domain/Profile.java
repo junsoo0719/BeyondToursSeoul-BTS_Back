@@ -61,4 +61,9 @@ public class Profile {
         this.updatedAt = OffsetDateTime.now();
     }
 
+    public void updatePreferredLanguage(String preferredLanguage) {
+        this.preferredLanguage = preferredLanguage;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
 }

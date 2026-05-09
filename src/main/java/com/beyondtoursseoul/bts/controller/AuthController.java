@@ -133,7 +133,8 @@ public class AuthController {
         return authService.updateProfile(
                 jwt,
                 body != null ? body.getNickname() : null,
-                body != null ? body.getLocalPreference() : null
+                body != null ? body.getLocalPreference() : null,
+                body != null ? body.getPreferredLanguage() : null
         );
     }
 }

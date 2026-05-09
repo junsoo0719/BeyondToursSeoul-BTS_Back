@@ -8,4 +8,5 @@ import lombok.Setter;
 public class UpdateProfileRequest {
     private String nickname;
     private String localPreference;
+    private String preferredLanguage;
 }

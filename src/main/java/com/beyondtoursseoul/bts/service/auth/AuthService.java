@@ -20,5 +20,5 @@ public interface AuthService {
 
     MeResponse updateNickname(Jwt jwt, String nickname);
 
-    MeResponse updateProfile(Jwt jwt, String nickname, String localPreference);
+    MeResponse updateProfile(Jwt jwt, String nickname, String localPreference, String preferredLanguage);
 }

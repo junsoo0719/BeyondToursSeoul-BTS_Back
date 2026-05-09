@@ -248,11 +248,11 @@ public class SupabaseAuthService implements AuthService {
 
     @Override
     public MeResponse updateNickname(Jwt jwt, String nickname) {
-        return updateProfile(jwt, nickname, null);
+        return updateProfile(jwt, nickname, null, null);
     }
 
     @Override
-    public MeResponse updateProfile(Jwt jwt, String nickname, String localPreference) {
+    public MeResponse updateProfile(Jwt jwt, String nickname, String localPreference, String preferredLanguage) {
         String userId = jwt.getSubject();
         UUID id = UUID.fromString(userId);
         Profile profile = profileRepository.findById(id)
@@ -277,6 +277,14 @@ public class SupabaseAuthService implements AuthService {
             profile.updateLocalPreference(normalizedPref);
         }
 
+        if (preferredLanguage != null) {
+            String normalizedLang = preferredLanguage.trim();
+            if (!allowedPreferredLanguages().contains(normalizedLang)) {
+                throw new IllegalArgumentException("지원하지 않는 언어입니다.");
+            }
+            profile.updatePreferredLanguage(normalizedLang);
+        }
+
         profileRepository.save(profile);
         return me(jwt);
     }
@@ -288,6 +296,15 @@ public class SupabaseAuthService implements AuthService {
                 "balanced",
                 "local70",
                 "local100"
+        ));
+    }
+
+    private Set<String> allowedPreferredLanguages() {
+        return new HashSet<>(Arrays.asList(
+                "한국어",
+                "English",
+                "日本語",
+                "中文"
         ));
     }
 
