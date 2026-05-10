@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 @Slf4j
-@Component
+//@Component
 @RequiredArgsConstructor
 @Order(3)
 public class AttractionDetailBatchRunner implements ApplicationRunner {

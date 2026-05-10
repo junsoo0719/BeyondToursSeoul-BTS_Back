@@ -16,7 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Slf4j
-@Component
+//@Component
 @Order(1)
 public class CategoryInitRunner implements ApplicationRunner {
 

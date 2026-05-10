@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 import java.io.InputStream;
 
 @Slf4j
-@Component
+//@Component
 @RequiredArgsConstructor
 public class DongBoundaryImportRunner implements ApplicationRunner {
 

@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 
 @Slf4j
-@Component
+//@Component
 @RequiredArgsConstructor
 @Order(2)
 public class InitialDataLoader implements ApplicationRunner {
