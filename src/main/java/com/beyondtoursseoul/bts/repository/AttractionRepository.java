@@ -43,13 +43,13 @@ public interface AttractionRepository extends JpaRepository<Attraction, Long> {
               and s.id.timeSlot = :timeSlot
               and (:minScore is null or s.score >= :minScore)
               and (:maxScore is null or s.score <= :maxScore)
-              and (:category is null or exists (
+              and (:hasCategory = false or exists (
                   select 1 from TourCategory c 
                   where (c.code = a.cat1 or c.code = a.cat2 or c.code = a.cat3)
-                    and (c.name like concat('%', :category, '%') 
-                      or LOWER(c.nameEn) like LOWER(concat('%', :category, '%'))
-                      or c.nameZh like concat('%', :category, '%') 
-                      or c.nameJa like concat('%', :category, '%'))
+                    and (c.name like :categoryKeyword 
+                      or LOWER(c.nameEn) like LOWER(:categoryKeyword) 
+                      or c.nameZh like :categoryKeyword 
+                      or c.nameJa like :categoryKeyword)
               ))
             order by s.score desc nulls last
             """)
@@ -58,7 +58,8 @@ public interface AttractionRepository extends JpaRepository<Attraction, Long> {
             @Param("timeSlot") String timeSlot,
             @Param("minScore") BigDecimal minScore,
             @Param("maxScore") BigDecimal maxScore,
-            @Param("category") String category,
+            @Param("hasCategory") boolean hasCategory,
+            @Param("categoryKeyword") String categoryKeyword,
             Pageable pageable
     );
 }

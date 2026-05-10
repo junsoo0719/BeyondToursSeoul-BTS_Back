@@ -47,12 +47,13 @@ public class AttractionQueryService {
         LocalDate effectiveDate = date != null ? date
                 : scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
 
-        // 프론트에서 온 category가 비어있으면 null로 처리하여 쿼리 필터 우회
-        String effectiveCategory = (category != null && !category.isBlank()) ? category : null;
+        // Null 파라미터로 인한 Postgres bytea 에러를 방지하기 위해 boolean 플래그와 검색 키워드를 Java에서 생성
+        boolean hasCategory = category != null && !category.isBlank();
+        String categoryKeyword = hasCategory ? "%" + category + "%" : "";
 
         // 1. DB에서 조건에 맞는 딱 10개의 관광지 데이터와 점수를 조인해서 가져옵니다 (초고속 페이징)
         Page<Object[]> pageResult = attractionRepository.findWithLocalScoresPage(
-                effectiveDate, timeSlot, minScore, maxScore, effectiveCategory, pageable);
+                effectiveDate, timeSlot, minScore, maxScore, hasCategory, categoryKeyword, pageable);
 
         // 2. 결과가 없으면 빈 페이지 반환
         if (pageResult.isEmpty()) {
