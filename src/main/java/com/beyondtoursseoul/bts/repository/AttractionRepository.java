@@ -4,6 +4,8 @@ import com.beyondtoursseoul.bts.domain.Attraction;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -31,5 +33,33 @@ public interface AttractionRepository extends JpaRepository<Attraction, Long> {
             @Param("timeSlot") String timeSlot,
             @Param("minScore") BigDecimal minScore,
             @Param("maxScore") BigDecimal maxScore
+    );
+
+    // 카테고리 필터(다국어 및 대소문자 무시 지원)와 페이지네이션이 적용
+    @Query("""
+            select a, s from Attraction a
+            join AttractionLocalScore s on s.id.attractionId = a.id
+            where s.id.date = :date
+              and s.id.timeSlot = :timeSlot
+              and (:minScore is null or s.score >= :minScore)
+              and (:maxScore is null or s.score <= :maxScore)
+              and (:hasCategory = false or exists (
+                  select 1 from TourCategory c 
+                  where (c.code = a.cat1 or c.code = a.cat2 or c.code = a.cat3)
+                    and (c.name like :categoryKeyword 
+                      or LOWER(c.nameEn) like LOWER(:categoryKeyword) 
+                      or c.nameZh like :categoryKeyword 
+                      or c.nameJa like :categoryKeyword)
+              ))
+            order by s.score desc nulls last
+            """)
+    Page<Object[]> findWithLocalScoresPage(
+            @Param("date") LocalDate date,
+            @Param("timeSlot") String timeSlot,
+            @Param("minScore") BigDecimal minScore,
+            @Param("maxScore") BigDecimal maxScore,
+            @Param("hasCategory") boolean hasCategory,
+            @Param("categoryKeyword") String categoryKeyword,
+            Pageable pageable
     );
 }
