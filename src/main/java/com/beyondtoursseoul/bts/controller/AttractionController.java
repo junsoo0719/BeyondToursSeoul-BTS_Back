@@ -52,12 +52,15 @@ public class AttractionController {
     }
 
 
+
     @Operation(
             summary = "관광지 목록 페이지네이션 조회",
-            description = "찐로컬 지수 score 내림차순으로 관광지 목록을 10개씩 페이지 단위로 반환합니다."
+            description = "카테고리(다국어 가능)와 찐로컬 지수 score 내림차순으로 관광지 목록을 10개씩 페이지 단위로 반환합니다."
     )
     @GetMapping("/page")
     public ResponseEntity<Page<AttractionSummaryResponse>> getListPage(
+            @Parameter(description = "카테고리 이름 (예: 음식, Food, Shopping 등)")
+            @RequestParam(required = false) String category,
             @Parameter(description = "조회 날짜 (yyyy-MM-dd). 미입력 시 DB 최신 날짜 사용")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @Parameter(description = "시간대. morning/lunch/afternoon/evening/night", example = "afternoon")
@@ -68,11 +71,16 @@ public class AttractionController {
             @RequestParam(required = false) BigDecimal maxScore,
             @Parameter(description = "언어 코드. ko(기본)/en/zh/ja")
             @RequestHeader(value = "Accept-Language", required = false, defaultValue = "ko") String lang,
-            @RequestParam(name = "page", defaultValue = "0") int page,
-            @RequestParam(name = "size", defaultValue = "10") int size) {
+            @Parameter(description = "페이지 번호 (0부터 시작)", example = "0")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "한 페이지당 데이터 개수", example = "10")
+            @RequestParam(defaultValue = "10") int size) {
 
         Pageable pageable = PageRequest.of(page, size);
-        return ResponseEntity.ok(attractionQueryService.getListPage(date, timeSlot, minScore, maxScore, parseLang(lang), pageable));
+
+        // 파라미터에 category를 추가하여 서비스로 넘깁니다.
+        return ResponseEntity.ok(attractionQueryService.getListPage(
+                category, date, timeSlot, minScore, maxScore, parseLang(lang), pageable));
     }
 
 
