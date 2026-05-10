@@ -45,7 +45,7 @@ public interface AttractionRepository extends JpaRepository<Attraction, Long> {
               and (:maxScore is null or s.score <= :maxScore)
               and (:category is null or exists (
                   select 1 from TourCategory c 
-                  where c.code in (a.cat1, a.cat2, a.cat3)
+                  where (c.code = a.cat1 or c.code = a.cat2 or c.code = a.cat3)
                     and (c.name like concat('%', :category, '%') 
                       or LOWER(c.nameEn) like LOWER(concat('%', :category, '%'))
                       or c.nameZh like concat('%', :category, '%') 
