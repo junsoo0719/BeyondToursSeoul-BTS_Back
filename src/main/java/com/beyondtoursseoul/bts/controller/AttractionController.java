@@ -10,8 +10,11 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.concurrent.TimeUnit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -48,7 +51,9 @@ public class AttractionController {
             @RequestParam(required = false) BigDecimal maxScore,
             @Parameter(description = "언어 코드. ko(기본)/en/zh/ja")
             @RequestHeader(value = "Accept-Language", required = false, defaultValue = "ko") String lang) {
-        return ResponseEntity.ok(attractionQueryService.getList(date, timeSlot, minScore, maxScore, parseLang(lang)));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(1, TimeUnit.HOURS).cachePublic())
+                .body(attractionQueryService.getList(date, timeSlot, minScore, maxScore, parseLang(lang)));
     }
 
 
@@ -79,8 +84,10 @@ public class AttractionController {
         Pageable pageable = PageRequest.of(page, size);
 
         // 파라미터에 category를 추가하여 서비스로 넘깁니다.
-        return ResponseEntity.ok(attractionQueryService.getListPage(
-                category, date, timeSlot, minScore, maxScore, parseLang(lang), pageable));
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(1, TimeUnit.HOURS).cachePublic())
+                .body(attractionQueryService.getListPage(
+                        category, date, timeSlot, minScore, maxScore, parseLang(lang), pageable));
     }
 
 

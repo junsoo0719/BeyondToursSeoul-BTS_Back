@@ -27,7 +27,8 @@ public class DailyScoreScheduler {
 
     @Caching(evict = {
             @CacheEvict(value = "attractions", allEntries = true),
-            @CacheEvict(value = "attractionsPage", allEntries = true)
+            @CacheEvict(value = "attractionsPage", allEntries = true),
+            @CacheEvict(value = "tourCategories", allEntries = true)
     })
     @Scheduled(cron = "0 0 1 * * *", zone = "Asia/Seoul")
     public void run() {
