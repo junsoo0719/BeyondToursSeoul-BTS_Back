@@ -11,7 +11,9 @@ import com.beyondtoursseoul.bts.repository.AttractionRepository;
 import com.beyondtoursseoul.bts.repository.AttractionTranslationRepository;
 import com.beyondtoursseoul.bts.repository.TourCategoryRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -37,6 +39,10 @@ public class AttractionQueryService {
     private final AttractionApiService attractionApiService;
     private final AttractionTranslationRepository translationRepository;
 
+    @Lazy
+    @Autowired
+    private AttractionQueryService self;
+
 
     // 캐시 키에 #category 추가
     @Cacheable(value = "attractionsPage", key = "{#category, #date, #timeSlot, #minScore, #maxScore, #lang, #pageable.pageNumber}")
@@ -60,9 +66,7 @@ public class AttractionQueryService {
             return Page.empty(pageable);
         }
 
-        Map<String, TourCategory> categories = categoryRepository.findAll()
-                .stream()
-                .collect(Collectors.toMap(TourCategory::getCode, c -> c));
+        Map<String, TourCategory> categories = self.getCategoryMap();
 
         // 3. 가져온 10개의 ID만 추출
         List<Long> attractionIds = pageResult.stream()
@@ -106,9 +110,7 @@ public class AttractionQueryService {
         List<Object[]> rows = attractionRepository.findWithLocalScoresForList(
                 effectiveDate, timeSlot, minScore, maxScore);
 
-        Map<String, TourCategory> categories = categoryRepository.findAll()
-                .stream()
-                .collect(Collectors.toMap(TourCategory::getCode, c -> c));
+        Map<String, TourCategory> categories = self.getCategoryMap();
 
         List<Long> attractionIds = rows.stream()
                 .map(r -> ((Attraction) r[0]).getId())
@@ -134,6 +136,13 @@ public class AttractionQueryService {
             ));
         }
         return out;
+    }
+
+    @Cacheable("tourCategories")
+    public Map<String, TourCategory> getCategoryMap() {
+        return categoryRepository.findAll()
+                .stream()
+                .collect(Collectors.toMap(TourCategory::getCode, c -> c));
     }
 
     private boolean isInScoreRange(BigDecimal score, BigDecimal min, BigDecimal max) {
@@ -172,9 +181,7 @@ public class AttractionQueryService {
             attraction.updateDetail(common.overview(), operatingHours, common.tel());
         }
 
-        Map<String, TourCategory> categories = categoryRepository.findAll()
-                .stream()
-                .collect(Collectors.toMap(TourCategory::getCode, c -> c));
+        Map<String, TourCategory> categories = self.getCategoryMap();
 
         LocalDate latestDate = scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
         Map<String, BigDecimal> scores = scoreRepository.findByIdAttractionIdAndIdDate(id, latestDate)
