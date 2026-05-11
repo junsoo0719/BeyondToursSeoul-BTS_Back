@@ -36,7 +36,14 @@ public class InitialDataLoader implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        LocalDate latestDate = localResidentApiService.findLatestAvailableDate();
+        LocalDate latestDate;
+        try {
+            latestDate = localResidentApiService.findLatestAvailableDate();
+        } catch (Exception e) {
+            log.error("초기 데이터 적재 중지 (API 연동 또는 환경변수 문제): {}", e.getMessage());
+            // 에러를 던지지 않고 메서드를 종료시켜, 서버 전체가 죽는(Crash) 현상을 완벽히 차단합니다.
+            return; 
+        }
 
         if (rawRepository.count() == 0) {
             log.info("초기 4주치 생활인구 데이터 적재 시작");
