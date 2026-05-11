@@ -101,14 +101,17 @@ public class AttractionQueryService {
 
     // 특별히 key를 적지 않으면 메서드 파라미터 전체를 조합해 자동으로 고유 키를 생성해줌
     @Cacheable(value = "attractions")
-    public List<AttractionSummaryResponse> getList(LocalDate date, String timeSlot,
+    public List<AttractionSummaryResponse> getList(String category, LocalDate date, String timeSlot,
                                                    BigDecimal minScore, BigDecimal maxScore,
                                                    String lang) {
         LocalDate effectiveDate = date != null ? date
                 : scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
 
+        boolean hasCategory = category != null && !category.isBlank();
+        String categoryKeyword = hasCategory ? "%" + category + "%" : "";
+
         List<Object[]> rows = attractionRepository.findWithLocalScoresForList(
-                effectiveDate, timeSlot, minScore, maxScore);
+                effectiveDate, timeSlot, minScore, maxScore, hasCategory, categoryKeyword);
 
         Map<String, TourCategory> categories = self.getCategoryMap();
 

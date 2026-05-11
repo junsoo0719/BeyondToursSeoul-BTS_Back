@@ -33,14 +33,16 @@ public class AttractionController {
 
     @Operation(
             summary = "관광지 목록 조회",
-            description = "찐로컬 지수 score 내림차순으로 관광지 목록을 반환합니다. " +
-                    "date 미입력 시 가장 최근 점수 날짜를 자동으로 사용합니다."
+            description = "카테고리 및 찐로컬 지수 score 내림차순으로 전체 관광지 목록을 반환합니다. " +
+                    "지도에 마커를 찍을 때 사용하기 좋습니다."
     )
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "조회 성공")
     })
     @GetMapping
     public ResponseEntity<List<AttractionSummaryResponse>> getList(
+            @Parameter(description = "카테고리 이름 (예: 음식, Food, Shopping 등)")
+            @RequestParam(required = false) String category,
             @Parameter(description = "조회 날짜 (yyyy-MM-dd). 미입력 시 DB 최신 날짜 사용")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @Parameter(description = "시간대. morning/lunch/afternoon/evening/night", example = "afternoon")
@@ -53,7 +55,7 @@ public class AttractionController {
             @RequestHeader(value = "Accept-Language", required = false, defaultValue = "ko") String lang) {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(1, TimeUnit.HOURS).cachePublic())
-                .body(attractionQueryService.getList(date, timeSlot, minScore, maxScore, parseLang(lang)));
+                .body(attractionQueryService.getList(category, date, timeSlot, minScore, maxScore, parseLang(lang)));
     }
 
 
