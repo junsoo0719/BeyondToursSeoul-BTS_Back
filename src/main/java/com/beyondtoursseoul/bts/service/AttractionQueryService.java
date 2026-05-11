@@ -10,6 +10,7 @@ import com.beyondtoursseoul.bts.repository.AttractionLocalScoreRepository;
 import com.beyondtoursseoul.bts.repository.AttractionRepository;
 import com.beyondtoursseoul.bts.repository.AttractionTranslationRepository;
 import com.beyondtoursseoul.bts.repository.TourCategoryRepository;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
@@ -36,7 +37,6 @@ public class AttractionQueryService {
     private final AttractionRepository attractionRepository;
     private final AttractionLocalScoreRepository scoreRepository;
     private final TourCategoryRepository categoryRepository;
-    private final AttractionApiService attractionApiService;
     private final AttractionTranslationRepository translationRepository;
 
     @Lazy
@@ -169,17 +169,11 @@ public class AttractionQueryService {
         return lang == null || lang.isBlank() || lang.toLowerCase().startsWith("ko");
     }
 
-    @Transactional
+    @Cacheable(value = "attractionDetail", key = "{#id, #lang}")
+    @Transactional(readOnly = true)
     public AttractionDetailResponse getDetail(Long id, String lang) {
         Attraction attraction = attractionRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("관광지를 찾을 수 없습니다: " + id));
-
-        if (!attraction.isDetailFetched() && attraction.getExternalId() != null) {
-            AttractionApiService.CommonDetail common = attractionApiService.fetchCommonDetail(attraction.getExternalId());
-            String operatingHours = attractionApiService.fetchOperatingHours(
-                    attraction.getExternalId(), attraction.getCategory());
-            attraction.updateDetail(common.overview(), operatingHours, common.tel());
-        }
 
         Map<String, TourCategory> categories = self.getCategoryMap();
 
