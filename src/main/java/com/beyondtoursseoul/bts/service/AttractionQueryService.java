@@ -22,8 +22,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -47,52 +49,76 @@ public class AttractionQueryService {
         LocalDate effectiveDate = date != null ? date
                 : scoreRepository.findLatestDate().orElse(LocalDate.now().minusDays(1));
 
-        // Null 파라미터로 인한 Postgres bytea 에러를 방지하기 위해 boolean 플래그와 검색 키워드를 Java에서 생성
+        // 1. 점수 리스트 쫙 가져오기 (가벼움)
+        List<AttractionLocalScore> scoreList = scoreRepository.findByIdDateAndIdTimeSlot(effectiveDate, timeSlot);
+
+        // 2. 카테고리가 있다면 해당 ID 목록만 따로 가져오기
         boolean hasCategory = category != null && !category.isBlank();
-        String categoryKeyword = hasCategory ? "%" + category + "%" : "";
+        Set<Long> categoryIdSet = null;
+        if (hasCategory) {
+            String categoryKeyword = "%" + category + "%";
+            categoryIdSet = new HashSet<>(attractionRepository.findIdsByCategoryNameAnyLang(categoryKeyword));
+        }
+        final Set<Long> finalCategoryIds = categoryIdSet;
 
-        // 1. DB에서 조건에 맞는 딱 10개의 관광지 데이터와 점수를 조인해서 가져옵니다 (초고속 페이징)
-        Page<Object[]> pageResult = attractionRepository.findWithLocalScoresPage(
-                effectiveDate, timeSlot, minScore, maxScore, hasCategory, categoryKeyword, pageable);
+        // 3. 필터링 및 정렬 (Java 메모리에서 초고속 처리, DB의 무거운 ORDER BY 부하 완벽 해결)
+        List<AttractionLocalScore> filteredScores = scoreList.stream()
+                .filter(s -> isInScoreRange(s.getScore(), minScore, maxScore))
+                .filter(s -> finalCategoryIds == null || finalCategoryIds.contains(s.getId().getAttractionId()))
+                .sorted(Comparator.comparing(AttractionLocalScore::getScore, Comparator.nullsLast(Comparator.reverseOrder())))
+                .collect(Collectors.toList());
 
-        // 2. 결과가 없으면 빈 페이지 반환
-        if (pageResult.isEmpty()) {
+        // 4. 페이지네이션 (딱 10개만 자르기)
+        int start = (int) pageable.getOffset();
+        int end = Math.min((start + pageable.getPageSize()), filteredScores.size());
+
+        if (start >= filteredScores.size()) {
             return Page.empty(pageable);
         }
 
+        // 5. 잘라낸 10개의 가벼운 점수 객체
+        List<AttractionLocalScore> pageScores = filteredScores.subList(start, end);
+        List<Long> pageIds = pageScores.stream()
+                .map(s -> s.getId().getAttractionId())
+                .collect(Collectors.toList());
+
+        // 6. DB에서 무거운 관광지 데이터는 딱 10개만 조회! (OOM 방어)
+        List<Attraction> attractions = attractionRepository.findAllById(pageIds);
+
+        // 7. 카테고리 정보, 번역 정보 매핑
         Map<String, TourCategory> categories = categoryRepository.findAll()
                 .stream()
                 .collect(Collectors.toMap(TourCategory::getCode, c -> c));
 
-        // 3. 가져온 10개의 ID만 추출
-        List<Long> attractionIds = pageResult.stream()
-                .map(r -> ((Attraction) r[0]).getId())
-                .collect(Collectors.toList());
-
-        // 4. 딱 10개의 번역 데이터만 IN 절로 싹쓸이 (N+1 방어 로직 완벽 유지)
         Map<Long, AttractionTranslation> translationMap = isKorean(lang)
                 ? Map.of()
-                : translationRepository.findByIdAttractionIdInAndIdLang(attractionIds, lang)
+                : translationRepository.findByIdAttractionIdInAndIdLang(pageIds, lang)
                   .stream()
                   .collect(Collectors.toMap(t -> t.getId().getAttractionId(), t -> t));
 
-        // 5. DTO 조립
-        List<AttractionSummaryResponse> out = new ArrayList<>(pageResult.getNumberOfElements());
-        for (Object[] row : pageResult) {
-            Attraction a = (Attraction) row[0];
-            AttractionLocalScore s = (AttractionLocalScore) row[1];
-            out.add(new AttractionSummaryResponse(
-                    a,
-                    s,
-                    resolveCategoryName(categories, a.getCat1(), lang),
-                    resolveCategoryName(categories, a.getCat2(), lang),
-                    resolveCategoryName(categories, a.getCat3(), lang),
-                    translationMap.get(a.getId())
-            ));
-        }
+        Map<Long, AttractionLocalScore> scoreMap = pageScores.stream()
+                .collect(Collectors.toMap(s -> s.getId().getAttractionId(), s -> s));
 
-        // 6. 프론트엔드가 페이징 처리를 할 수 있도록 PageImpl 포장 반환
-        return new PageImpl<>(out, pageable, pageResult.getTotalElements());
+        // DB IN 절 결과는 순서가 보장되지 않으므로, pageIds 순서대로 재배치
+        Map<Long, Attraction> attractionMap = attractions.stream()
+                .collect(Collectors.toMap(Attraction::getId, a -> a));
+
+        List<AttractionSummaryResponse> dtoList = pageIds.stream()
+                .filter(attractionMap::containsKey) // 안전장치
+                .map(id -> {
+                    Attraction a = attractionMap.get(id);
+                    return new AttractionSummaryResponse(
+                            a,
+                            scoreMap.get(id),
+                            resolveCategoryName(categories, a.getCat1(), lang),
+                            resolveCategoryName(categories, a.getCat2(), lang),
+                            resolveCategoryName(categories, a.getCat3(), lang),
+                            translationMap.get(id)
+                    );
+                })
+                .collect(Collectors.toList());
+
+        return new PageImpl<>(dtoList, pageable, filteredScores.size());
     }
 
     // 특별히 key를 적지 않으면 메서드 파라미터 전체를 조합해 자동으로 고유 키를 생성해줌
