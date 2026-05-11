@@ -1,7 +1,20 @@
 package com.beyondtoursseoul.bts.service;
 
+import com.beyondtoursseoul.bts.domain.Attraction;
+import com.beyondtoursseoul.bts.domain.AttractionTranslation;
+import com.beyondtoursseoul.bts.domain.locker.Locker;
+import com.beyondtoursseoul.bts.domain.locker.LockerTranslation;
+import com.beyondtoursseoul.bts.domain.tour.TourApiEvent;
+import com.beyondtoursseoul.bts.domain.tour.TourApiEventTranslation;
+import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.AiChatRequest;
 import com.beyondtoursseoul.bts.dto.AiChatResponse;
+import com.beyondtoursseoul.bts.repository.AttractionRepository;
+import com.beyondtoursseoul.bts.repository.AttractionTranslationRepository;
+import com.beyondtoursseoul.bts.repository.locker.LockerRepository;
+import com.beyondtoursseoul.bts.repository.locker.LockerTranslationRepository;
+import com.beyondtoursseoul.bts.repository.tour.TourApiEventRepository;
+import com.beyondtoursseoul.bts.repository.tour.TourApiEventTranslationRepository;
 import com.beyondtoursseoul.bts.service.rag.RagSearchService;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,6 +35,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -37,16 +51,33 @@ public class GroqChatService {
     private static final Pattern PLACE_NAME_PATTERN = Pattern.compile("장소명\\s*:\\s*([^\\n\\r]+)");
     private static final Pattern ADDRESS_PATTERN = Pattern.compile("주소\\s*:\\s*([^\\n\\r]+)");
     private static final Pattern OPERATING_HOURS_PATTERN = Pattern.compile("\\[운영시간\\]\\s*([^\\n\\r]+)");
+    private static final Pattern CONTENT_IMAGE_PATTERN = Pattern.compile("(?i)(?:썸네일|thumbnail|대표\\s*이미지|image)\\s*:?\\s*(https?://\\S+)");
+    private static final Pattern METADATA_IMAGE_PATTERN = Pattern.compile(
+            "(?i)\"(?:thumbnail|imageurl|image_url|firstimage|first_image|photo|photourl|first_image2)\"\\s*:\\s*\"(https?://[^\"]+)\""
+    );
     private static final Pattern TIME_RANGE_PATTERN = Pattern.compile("(\\d{1,2})(?::(\\d{2}))?\\s*(?:~|-|–|—)\\s*(\\d{1,2})(?::(\\d{2}))?");
     private static final Pattern LOCAL_RATIO_PATTERN = Pattern.compile("로컬\\s*(\\d+)\\s*%");
-    private static final Pattern ARRIVAL_TIME_PATTERN = Pattern.compile("(?:도착|arrival)\\s*(\\d{1,2}:\\d{2})", Pattern.CASE_INSENSITIVE);
-    private static final Pattern DEPARTURE_TIME_PATTERN = Pattern.compile("(?:출발|departure)\\s*(\\d{1,2}:\\d{2})", Pattern.CASE_INSENSITIVE);
+    /** 사용자 요약(히스토리)·메시지에서 도착/출발 시각 파싱 (다국어 UI 문자열 포함) */
+    private static final Pattern ARRIVAL_TIME_PATTERN = Pattern.compile(
+            "(?:도착|arrival|arrive)\\s*[:：]?\\s*(\\d{1,2}:\\d{2})",
+            Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern DEPARTURE_TIME_PATTERN = Pattern.compile(
+            "(?:출발|departure|depart)\\s*[:：]?\\s*(\\d{1,2}:\\d{2})",
+            Pattern.CASE_INSENSITIVE
+    );
     private static final Pattern DATE_RANGE_PATTERN = Pattern.compile("(\\d{4}-\\d{2}-\\d{2})\\s*(?:~|〜|–|—|-)\\s*(\\d{4}-\\d{2}-\\d{2})");
     private static final List<String> SLOT_ORDER = List.of("아침", "오전 코스", "점심", "오후 코스", "저녁", "밤 코스");
     private static final int DEFAULT_LOCAL_RATIO = 50;
 
     private final RestClient restClient;
     private final RagSearchService ragSearchService;
+    private final AttractionRepository attractionRepository;
+    private final AttractionTranslationRepository attractionTranslationRepository;
+    private final TourApiEventRepository tourApiEventRepository;
+    private final TourApiEventTranslationRepository tourApiEventTranslationRepository;
+    private final LockerRepository lockerRepository;
+    private final LockerTranslationRepository lockerTranslationRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${groq.api.key:}")
@@ -60,9 +91,21 @@ public class GroqChatService {
 
     public GroqChatService(
             RagSearchService ragSearchService,
+            AttractionRepository attractionRepository,
+            AttractionTranslationRepository attractionTranslationRepository,
+            TourApiEventRepository tourApiEventRepository,
+            TourApiEventTranslationRepository tourApiEventTranslationRepository,
+            LockerRepository lockerRepository,
+            LockerTranslationRepository lockerTranslationRepository,
             @Value("${groq.api.base-url:https://api.groq.com/openai/v1}") String baseUrl
     ) {
         this.ragSearchService = ragSearchService;
+        this.attractionRepository = attractionRepository;
+        this.attractionTranslationRepository = attractionTranslationRepository;
+        this.tourApiEventRepository = tourApiEventRepository;
+        this.tourApiEventTranslationRepository = tourApiEventTranslationRepository;
+        this.lockerRepository = lockerRepository;
+        this.lockerTranslationRepository = lockerTranslationRepository;
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .build();
@@ -261,7 +304,26 @@ public class GroqChatService {
 
     // CANDIDATES: RAG에서 넘어온 문서 수에 맞춰 compact JSON (n/a 키), 상한은 토큰 고려
     private String createCandidatePrompt(ArrayNode candidates) {
-        return "CANDIDATES:" + candidates.toString();
+        ArrayNode promptCandidates = objectMapper.createArrayNode();
+        for (JsonNode candidate : candidates) {
+            ObjectNode node = promptCandidates.addObject();
+            node.put("n", candidate.path("n").asText(""));
+            node.put("a", candidate.path("a").asText(""));
+            node.put("c", candidate.path("c").asText(""));
+            node.put("h", candidate.path("h").asText(""));
+            node.put("st", candidate.path("st").asText(""));
+            node.put("sid", candidate.path("sid").asText(""));
+            if (!candidate.path("lat").isMissingNode() && !candidate.path("lat").isNull()) {
+                node.put("lat", candidate.path("lat").asDouble());
+            }
+            if (!candidate.path("lng").isMissingNode() && !candidate.path("lng").isNull()) {
+                node.put("lng", candidate.path("lng").asDouble());
+            }
+            if (!candidate.path("ls").isMissingNode() && !candidate.path("ls").isNull()) {
+                node.put("ls", candidate.path("ls").asDouble());
+            }
+        }
+        return "CANDIDATES:" + promptCandidates;
     }
 
     private int candidateArrayLimit(List<RagSearchService.RagDocumentContext> documents) {
@@ -285,6 +347,7 @@ public class GroqChatService {
             }
 
             String body = slimRagContentForPrompt(nullToEmpty(doc.content()));
+            String thumbnail = extractThumbnail(body, doc.metadata());
 
             String placeName = extractField(body, PLACE_NAME_PATTERN);
             if (placeName.isBlank()) {
@@ -304,6 +367,9 @@ public class GroqChatService {
             node.put("h", extractField(body, OPERATING_HOURS_PATTERN));
             node.put("st", nullToEmpty(doc.sourceType()));
             node.put("sid", nullToEmpty(doc.sourceId()));
+            if (!thumbnail.isBlank()) {
+                node.put("img", thumbnail);
+            }
             if (doc.latitude() != null) node.put("lat", doc.latitude());
             if (doc.longitude() != null) node.put("lng", doc.longitude());
             if (doc.localScore() != null) {
@@ -362,6 +428,25 @@ public class GroqChatService {
             return "";
         }
         Matcher matcher = pattern.matcher(content);
+        if (!matcher.find()) {
+            return "";
+        }
+        return matcher.group(1).trim();
+    }
+
+    private String extractThumbnail(String content, String metadata) {
+        String fromMetadata = extractByPattern(nullToEmpty(metadata), METADATA_IMAGE_PATTERN);
+        if (!fromMetadata.isBlank()) {
+            return fromMetadata;
+        }
+        return extractByPattern(nullToEmpty(content), CONTENT_IMAGE_PATTERN);
+    }
+
+    private String extractByPattern(String source, Pattern pattern) {
+        if (source == null || source.isBlank()) {
+            return "";
+        }
+        Matcher matcher = pattern.matcher(source);
         if (!matcher.find()) {
             return "";
         }
@@ -503,6 +588,7 @@ public class GroqChatService {
             optimizeDailyTravel(dayList, candidates);
             optimizeCrossDayTravel(dayList, candidates);
             optimizeDailyTravel(dayList, candidates);
+            localizeSlotsBySource(dayList, request.getLanguage());
             clearAllSlotReasons(dayList);
             return new AiChatResponse(response.getAnswer(), structured, response.getModel());
         } catch (Exception e) {
@@ -513,6 +599,151 @@ public class GroqChatService {
 
     private String str(Object value) {
         return value == null ? "" : value.toString().trim();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void localizeSlotsBySource(List<?> dayList, String requestLanguage) {
+        if (dayList == null || dayList.isEmpty()) return;
+
+        TourLanguage tourLanguage = resolveTourLanguage(requestLanguage);
+        String attractionLang = resolveAttractionLang(requestLanguage);
+        String lockerLangCode = tourLanguage.getLockerLangCode();
+
+        Set<Long> attractionIds = new HashSet<>();
+        Set<Long> eventIds = new HashSet<>();
+        Set<Long> lockerIds = new HashSet<>();
+
+        for (Object dayRaw : dayList) {
+            if (!(dayRaw instanceof Map<?, ?> dayMap)) continue;
+            for (Map<String, Object> slot : mutableSlots((Map<String, Object>) dayMap)) {
+                String sourceType = str(slot.get("sourceType")).toLowerCase();
+                Long sourceId = parseLongOrNull(str(slot.get("sourceId")));
+                if (sourceId == null) continue;
+                if (sourceType.contains("attraction")) attractionIds.add(sourceId);
+                else if (sourceType.contains("event")) eventIds.add(sourceId);
+                else if (sourceType.contains("locker")) lockerIds.add(sourceId);
+            }
+        }
+
+        Map<Long, Attraction> attractionMap = attractionIds.isEmpty()
+                ? Map.of()
+                : attractionRepository.findAllById(attractionIds).stream()
+                .collect(LinkedHashMap::new, (m, a) -> m.put(a.getId(), a), LinkedHashMap::putAll);
+        Map<Long, AttractionTranslation> attractionTranslationMap = (!attractionIds.isEmpty() && !"ko".equals(attractionLang))
+                ? attractionTranslationRepository.findByIdAttractionIdInAndIdLang(new ArrayList<>(attractionIds), attractionLang).stream()
+                .collect(LinkedHashMap::new, (m, t) -> m.put(t.getId().getAttractionId(), t), LinkedHashMap::putAll)
+                : Map.of();
+
+        Map<Long, TourApiEvent> eventMap = eventIds.isEmpty()
+                ? Map.of()
+                : tourApiEventRepository.findAllById(eventIds).stream()
+                .collect(LinkedHashMap::new, (m, e) -> m.put(e.getContentId(), e), LinkedHashMap::putAll);
+        Map<Long, TourApiEventTranslation> eventTranslationMap = new LinkedHashMap<>();
+        if (!eventMap.isEmpty()) {
+            List<TourApiEvent> events = new ArrayList<>(eventMap.values());
+            List<TourLanguage> languages = tourLanguage == TourLanguage.KOR
+                    ? List.of(TourLanguage.KOR)
+                    : List.of(tourLanguage, TourLanguage.KOR);
+            for (TourApiEventTranslation tr : tourApiEventTranslationRepository.findByEventInAndLanguageIn(events, languages)) {
+                Long id = tr.getEvent().getContentId();
+                TourApiEventTranslation existing = eventTranslationMap.get(id);
+                if (existing == null || (existing.getLanguage() != tourLanguage && tr.getLanguage() == tourLanguage)) {
+                    eventTranslationMap.put(id, tr);
+                }
+            }
+        }
+
+        Map<Long, Locker> lockerMap = lockerIds.isEmpty()
+                ? Map.of()
+                : lockerRepository.findAllById(lockerIds).stream()
+                .collect(LinkedHashMap::new, (m, l) -> m.put(l.getId(), l), LinkedHashMap::putAll);
+        Map<Long, LockerTranslation> lockerTranslationMap = new LinkedHashMap<>();
+        if (!lockerMap.isEmpty()) {
+            for (Locker locker : lockerMap.values()) {
+                LockerTranslation preferred = lockerTranslationRepository.findByLockerAndLanguageCode(locker, lockerLangCode).orElse(null);
+                LockerTranslation fallback = lockerTranslationRepository.findByLockerAndLanguageCode(locker, "ko").orElse(null);
+                if (preferred != null) lockerTranslationMap.put(locker.getId(), preferred);
+                else if (fallback != null) lockerTranslationMap.put(locker.getId(), fallback);
+            }
+        }
+
+        for (Object dayRaw : dayList) {
+            if (!(dayRaw instanceof Map<?, ?> dayMap)) continue;
+            for (Map<String, Object> slot : mutableSlots((Map<String, Object>) dayMap)) {
+                String sourceType = str(slot.get("sourceType")).toLowerCase();
+                Long sourceId = parseLongOrNull(str(slot.get("sourceId")));
+                if (sourceId == null) continue;
+
+                if (sourceType.contains("attraction")) {
+                    Attraction attraction = attractionMap.get(sourceId);
+                    if (attraction == null) continue;
+                    AttractionTranslation tr = attractionTranslationMap.get(sourceId);
+                    String name = tr != null ? str(tr.getName()) : str(attraction.getName());
+                    String address = tr != null ? str(tr.getAddress()) : str(attraction.getAddress());
+                    String thumbnail = str(attraction.getThumbnail());
+                    if (!name.isBlank()) slot.put("placeName", name);
+                    if (!address.isBlank()) slot.put("address", address);
+                    if (!thumbnail.isBlank()) slot.put("thumbnail", thumbnail);
+                    continue;
+                }
+
+                if (sourceType.contains("event")) {
+                    TourApiEvent event = eventMap.get(sourceId);
+                    if (event == null) continue;
+                    TourApiEventTranslation tr = eventTranslationMap.get(sourceId);
+                    String name = tr != null ? str(tr.getTitle()) : "";
+                    String address = tr != null ? firstNonBlank(tr.getAddress(), tr.getEventPlace()) : "";
+                    String thumbnail = firstNonBlank(event.getFirstImage2(), event.getFirstImage());
+                    if (!name.isBlank()) slot.put("placeName", name);
+                    if (!address.isBlank()) slot.put("address", address);
+                    if (!thumbnail.isBlank()) slot.put("thumbnail", thumbnail);
+                    continue;
+                }
+
+                if (sourceType.contains("locker")) {
+                    LockerTranslation tr = lockerTranslationMap.get(sourceId);
+                    if (tr == null) continue;
+                    String name = firstNonBlank(tr.getStationName(), tr.getLockerName());
+                    String address = str(tr.getDetailLocation());
+                    if (!name.isBlank()) slot.put("placeName", name);
+                    if (!address.isBlank()) slot.put("address", address);
+                }
+            }
+        }
+    }
+
+    private String resolveAttractionLang(String language) {
+        if (language == null || language.isBlank()) return "ko";
+        String lower = language.toLowerCase();
+        if (lower.startsWith("en")) return "en";
+        if (lower.startsWith("ja")) return "ja";
+        if (lower.startsWith("zh")) return "zh";
+        return "ko";
+    }
+
+    private TourLanguage resolveTourLanguage(String language) {
+        try {
+            return TourLanguage.fromCode(language);
+        } catch (Exception ignored) {
+            return TourLanguage.KOR;
+        }
+    }
+
+    private Long parseLongOrNull(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Long.parseLong(value.trim());
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) return "";
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value.trim();
+        }
+        return "";
     }
 
     @SuppressWarnings("unchecked")
@@ -634,12 +865,13 @@ public class GroqChatService {
                 Do not wrap the JSON in markdown code fences.
                 Return only this JSON shape:
                 {
+                  "answer": "Short Markdown for the chat bubble (2-5 sentences). MUST be written entirely in the same human language as Requested language above.",
                   "days": [
                     {
                       "date": "YYYY-MM-DD",
                       "label": "1일차",
                       "slots": [
-                        { "type": "...", "label": "...", "placeName": "...", "address": "...", "reason": "..." }
+                        { "type": "...", "label": "...", "placeName": "...", "address": "...", "thumbnail": "...", "reason": "..." }
                       ]
                     }
                   ],
@@ -648,19 +880,28 @@ public class GroqChatService {
                 }
 
                 Rules:
-                - slot.type/label: one of 아침|오전 코스|점심|오후 코스|저녁|밤 코스
+                - "answer" is required every time: friendly summary of the plan for the user, same language as Requested language (ko/en/ja/zh).
+                - Each day's "label" (e.g. day title) should also be written in the same human language as Requested language (e.g. English: "Day 1", Japanese: "1日目", Korean: "1일차").
+                - Slots per day are FLEXIBLE (not always 6): use the user's flight arrival time and departure time (from the trip summary / chat, e.g. lines with 도착/arrive and 출발/depart) to decide which parts of the day are realistic.
+                  - First day: if arrival is late morning or afternoon, omit 아침 and possibly 오전 코스; if arrival is evening, keep only 저녁 and/or 밤 코스 as appropriate.
+                  - Last day: if departure is morning or before lunch, omit 밤 코스 and 저녁 (and 오후 코스 if needed); if departure is early afternoon, trim evening slots accordingly.
+                  - Middle days: usually fill as fully as reasonable (often up to the full sequence below), still respecting travel time between slots.
+                - When you include multiple slots in one day, list them ONLY in this canonical order (subset allowed, never reorder): 아침 → 오전 코스 → 점심 → 오후 코스 → 저녁 → 밤 코스.
+                - Prefer to pack the day densely when times allow: meal slots (아침, 점심, 저녁) with restaurant-like CANDIDATES; sightseeing slots (오전 코스, 오후 코스, 밤 코스) with attraction/culture-like CANDIDATES.
+                - slot.type/label: one of 아침|오전 코스|점심|오후 코스|저녁|밤 코스 (keep these Korean tokens exactly for slot.type and slot.label so downstream parsers match)
                 - slot.label == slot.type
                 - slot.placeName: use CANDIDATES[].n first, never empty
                 - Do not repeat the same placeName across all days/slots (case-insensitive). One place can appear only once.
                 - slot.address: use CANDIDATES[].a, empty if unknown
+                - slot.thumbnail: use CANDIDATES[].img if available, otherwise ""
                 - slot.reason: always use empty string "" (no narrative; place detail is shown elsewhere in the app).
-                - Prefer restaurant candidates for 아침, lunch, and dinner slots, but use non-restaurant fallback when restaurant candidates are insufficient.
+                - Prefer restaurant-like candidates for 아침, 점심, and 저녁 slots, but use non-restaurant fallback when restaurant candidates are insufficient.
                 - Prefer attraction/culture-like candidates for 오전 코스, 오후 코스, and 밤 코스 slots, but keep fallback flexible.
                 - Prefer places likely open at the slot time (morning/lunch/afternoon/dinner/night).
                 - Keep consecutive moves practical; avoid transitions that are likely over 45 minutes when alternatives exist.
                 - Across days: the LAST slot of day N and the FIRST slot of day N+1 should also be within ~45 minutes travel when both have locations, unless the user clearly wants a long-distance jump (e.g. new city day).
-                - Do not put locker/luggage-storage places in slots; the app shows nearest official lockers by API from the day-1 breakfast and last-day last stop coordinates.
-                - CANDIDATES key: n=name, a=address, c=category, h=operatingHours, st=sourceType, sid=sourceId, lat=latitude, lng=longitude, ls=localScore (0~1, higher = more local vibe)
+                - Never put locker/luggage-storage POIs in slots. Lockers are not loaded into CANDIDATES for this flow; the app uses a separate nearest-locker API (first-day + last-day anchors only).
+                - CANDIDATES key: n=name, a=address, img=thumbnailUrl, c=category, h=operatingHours, st=sourceType, sid=sourceId, lat=latitude, lng=longitude, ls=localScore (0~1, higher = more local vibe)
 
                 Itinerary revision (when chat history exists or the user asks to change the plan):
                 - The LAST user message is the primary instruction for THIS response. Follow it over older turns if they conflict.
@@ -673,7 +914,7 @@ public class GroqChatService {
                 - If the user names a place to remove, remove it and fill that slot from CANDIDATES without duplicating placeName elsewhere.
                 - If the user names a theme or style (e.g. 실내, 야경, 한식만), retune affected slots to match; use CANDIDATES and PLACES.
                 - If the user contradicts an earlier request, obey the latest user message.
-                - After edits, summary.title and summary.route must still reflect the full updated itinerary in Korean.
+                - summary.title, summary.route lines, and any natural-language fields in "budget" must be written in the same human language as Requested language (not necessarily Korean).
                 """.formatted(language);
     }
 
@@ -682,6 +923,8 @@ public class GroqChatService {
                 Retry mode: your previous JSON had too many empty fields.
                 Fill every slot with non-empty placeName (and type/label).
                 Mandatory rules:
+                - Include a non-empty top-level "answer" string (Markdown, user's language).
+                - Each day MUST have a non-empty "slots" array. Slot count is flexible by flight arrival/departure (see main rules); within a day, slot types must appear only in canonical order (아침 → 오전 코스 → 점심 → 오후 코스 → 저녁 → 밤 코스), each at most once per day.
                 - Each slot.type must be one of: 아침, 오전 코스, 점심, 오후 코스, 저녁, 밤 코스
                 - Each slot.label must equal slot.type
                 - slot.placeName must be a concrete place name in Seoul, never empty
@@ -844,10 +1087,33 @@ public class GroqChatService {
     }
 
     @SuppressWarnings("unchecked")
+    /** 코스 생성 직후 메시지가 짧아도, 이전 user 턴 요약에 비행 시각이 있을 수 있음 */
+    private String userTextBlobForFlightParsing(AiChatRequest request) {
+        if (request == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        if (request.getHistory() != null) {
+            for (AiChatRequest.ChatHistoryMessage m : request.getHistory()) {
+                if (m == null || m.getRole() == null || m.getContent() == null) {
+                    continue;
+                }
+                if ("user".equalsIgnoreCase(m.getRole().trim())) {
+                    sb.append('\n').append(m.getContent());
+                }
+            }
+        }
+        if (request.getMessage() != null && !request.getMessage().isBlank()) {
+            sb.append('\n').append(request.getMessage());
+        }
+        return sb.toString();
+    }
+
     private void applyFlightTimeWindow(List<?> dayList, AiChatRequest request) {
         if (dayList == null || dayList.isEmpty() || request == null) return;
-        Integer arrivalHour = extractHour(request.getMessage(), ARRIVAL_TIME_PATTERN);
-        Integer departureHour = extractHour(request.getMessage(), DEPARTURE_TIME_PATTERN);
+        String blob = userTextBlobForFlightParsing(request);
+        Integer arrivalHour = extractHour(blob, ARRIVAL_TIME_PATTERN);
+        Integer departureHour = extractHour(blob, DEPARTURE_TIME_PATTERN);
 
         if (arrivalHour != null) {
             Map<String, Object> firstDay = firstMap(dayList);
@@ -946,8 +1212,10 @@ public class GroqChatService {
         if (slot == null || candidate == null) return;
         String st = candidate.path("st").asText("");
         String sid = candidate.path("sid").asText("");
+        String thumbnail = candidate.path("img").asText("");
         if (!st.isBlank()) slot.put("sourceType", st);
         if (!sid.isBlank()) slot.put("sourceId", sid);
+        if (!thumbnail.isBlank()) slot.put("thumbnail", thumbnail);
         String cat = candidate.path("c").asText("");
         if (!cat.isBlank()) {
             slot.put("category", cat);

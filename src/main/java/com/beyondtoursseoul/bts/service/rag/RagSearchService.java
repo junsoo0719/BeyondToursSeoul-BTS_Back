@@ -201,6 +201,7 @@ public class RagSearchService {
                       on pe.source_type = rd.source_type
                      and pe.source_id = rd.source_id
                     where rd.lang_code in (:langCodes)
+                      and lower(coalesce(rd.source_type, '')) not like '%locker%'
                       and (%s)
                 ),
                 max_match as (
@@ -242,7 +243,7 @@ public class RagSearchService {
                 limit :limit
                 """.formatted(scoreExpression, matchCondition);
 
-        List<RagDocumentContext> candidates = jdbcTemplate.query(sql, params, (rs, rowNum) -> {
+        List<RagDocumentContext> raw = jdbcTemplate.query(sql, params, (rs, rowNum) -> {
             String sourceType = rs.getString("source_type");
             String title = rs.getString("title");
             String content = rs.getString("content");
@@ -266,6 +267,13 @@ public class RagSearchService {
             );
         });
 
+        List<RagDocumentContext> candidates = new ArrayList<>();
+        for (RagDocumentContext row : raw) {
+            if (!isLockerRagRow(row)) {
+                candidates.add(row);
+            }
+        }
+
         List<RagDocumentContext> results = diversifyResults(candidates, resultLimit, tripDays);
         logSearchResults(message, keywords, langCodes, tripDays, resultLimit, localRatio, results);
         return results;
@@ -285,7 +293,6 @@ public class RagSearchService {
         addCategoryResults(candidates, selected, selectedIds, "night", ancillaryLimit, resultLimit);
         addCategoryResults(candidates, selected, selectedIds, "event", ancillaryLimit, resultLimit);
         addCategoryResults(candidates, selected, selectedIds, "shopping_kpop", ancillaryLimit, resultLimit);
-        addCategoryResults(candidates, selected, selectedIds, "locker", tripDays >= 3 ? 2 : 1, resultLimit);
 
         for (RagDocumentContext candidate : candidates) {
             if (selected.size() >= resultLimit) {
@@ -298,6 +305,19 @@ public class RagSearchService {
         }
 
         return selected;
+    }
+
+    /** AI 코스용 RAG에서는 물품보관함 문서를 쓰지 않음(앱에서 nearest API). */
+    private boolean isLockerRagRow(RagDocumentContext c) {
+        if (c == null) {
+            return true;
+        }
+        String cat = c.category();
+        if (cat != null && "locker".equalsIgnoreCase(cat.trim())) {
+            return true;
+        }
+        String st = c.sourceType();
+        return st != null && st.toLowerCase(Locale.ROOT).contains("locker");
     }
 
     private void addCategoryResults(
@@ -378,15 +398,14 @@ public class RagSearchService {
 
     /**
      * diversify 단계에서 선택할 최대 문서 수.
-     * 식당·관광(일수×6) + 야경·행사·쇼핑(일수 기반, 상한) + 락커를 모두 담을 수 있게 잡는다.
+     * 식당·관광(일수×10) + 야경·행사·쇼핑(일수 기반, 상한). 락커는 RAG에 넣지 않음(앱에서 nearest API).
      */
     private int resultLimitFor(int tripDays) {
         int t = clampTripDays(tripDays);
         int restaurants = PER_DAY_RESTAURANT * t;
         int attractions = PER_DAY_ATTRACTION * t;
         int anc = ancillaryCategoryLimit(tripDays);
-        int locker = t >= 3 ? 2 : 1;
-        int budget = restaurants + attractions + 3 * anc + locker;
+        int budget = restaurants + attractions + 3 * anc;
         return Math.min(MAX_RESULT_CAP, Math.max(12, budget));
     }
 

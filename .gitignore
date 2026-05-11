@@ -49,3 +49,7 @@ application-secret.properties
 
 # GeoJSON 데이터 파일 (용량이 크므로 직접 다운로드)
 src/main/resources/geojson/
+
+# Python (tools/)
+__pycache__/
+*.py[cod]
