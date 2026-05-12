@@ -807,16 +807,52 @@ public class GroqChatService {
     }
 
     private TripDateRange resolveTripDateRange(AiChatRequest request) {
-        if (request == null) return null;
+        if (request == null) {
+            return null;
+        }
+        TripDateRange explicit = tripRangeFromExplicitFields(request);
+        if (explicit != null) {
+            return explicit;
+        }
         TripDateRange fromMessage = extractDateRange(request.getMessage());
-        if (fromMessage != null) return fromMessage;
-        if (request.getHistory() == null) return null;
+        if (fromMessage != null) {
+            return fromMessage;
+        }
+        if (request.getHistory() == null) {
+            return null;
+        }
         for (AiChatRequest.ChatHistoryMessage historyMessage : request.getHistory()) {
-            if (!isValidHistoryMessage(historyMessage)) continue;
+            if (!isValidHistoryMessage(historyMessage)) {
+                continue;
+            }
             TripDateRange fromHistory = extractDateRange(historyMessage.getContent());
-            if (fromHistory != null) return fromHistory;
+            if (fromHistory != null) {
+                return fromHistory;
+            }
         }
         return null;
+    }
+
+    private TripDateRange tripRangeFromExplicitFields(AiChatRequest request) {
+        String a = request.getTripStart();
+        String b = request.getTripEnd();
+        if (a == null || b == null || a.isBlank() || b.isBlank()) {
+            return null;
+        }
+        try {
+            LocalDate start = LocalDate.parse(a.trim());
+            LocalDate end = LocalDate.parse(b.trim());
+            if (end.isBefore(start)) {
+                return null;
+            }
+            long span = ChronoUnit.DAYS.between(start, end) + 1;
+            if (span < 1 || span > 21) {
+                return null;
+            }
+            return new TripDateRange(start, end);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
     }
 
     /**
@@ -867,30 +903,133 @@ public class GroqChatService {
     }
 
     /**
-     * Groq가 date를 비우거나 잘못 넣은 경우에도 UI·지도가 ISO 일자를 쓰도록,
-     * 요청 본문/히스토리에서 파싱한 YYYY-MM-DD ~ YYYY-MM-DD 구간에 맞춰 각 day의 date를 덮어쓴다.
+     * 모델이 낸 days를 가변 리스트로 바꾼 뒤, 요청 캘린더 일수에 맞게 자르거나 패딩하고
+     * 빈 일차는 후보에서 최소 슬롯을 채운다.
      */
     @SuppressWarnings("unchecked")
-    private void normalizeStructuredDayDates(List<?> dayList, AiChatRequest request) {
+    private List<Map<String, Object>> normalizeDaysToMutableList(List<?> raw) {
+        List<Map<String, Object>> days = new ArrayList<>();
+        if (raw != null) {
+            for (Object o : raw) {
+                if (o instanceof Map<?, ?> m) {
+                    days.add((Map<String, Object>) m);
+                }
+            }
+        }
+        return days;
+    }
+
+    private String formatTripDayLabel(int zeroBasedIndex, String language) {
+        int n = zeroBasedIndex + 1;
+        String lang = language == null ? "" : language.trim().toLowerCase();
+        if (lang.startsWith("en")) {
+            return "Day " + n;
+        }
+        if (lang.startsWith("ja")) {
+            return n + "日目";
+        }
+        if (lang.startsWith("zh")) {
+            return "第" + n + "天";
+        }
+        return n + "일차";
+    }
+
+    private void ensureTripCalendarShape(List<Map<String, Object>> days, AiChatRequest request, ArrayNode candidates) {
         TripDateRange range = resolveTripDateRange(request);
-        if (range == null || dayList == null || dayList.isEmpty()) {
+        Integer expected = expectedInclusiveCalendarDays(request);
+        if (range == null || expected == null) {
             return;
         }
-        long span = ChronoUnit.DAYS.between(range.start(), range.end()) + 1;
-        if (span < 1 || span > 21) {
+        int before = days.size();
+        while (days.size() < expected) {
+            int idx = days.size();
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("date", range.start().plusDays(idx).toString());
+            d.put("label", formatTripDayLabel(idx, request.getLanguage()));
+            d.put("slots", new ArrayList<>());
+            days.add(d);
+        }
+        while (days.size() > expected) {
+            days.remove(days.size() - 1);
+        }
+        for (int i = 0; i < days.size(); i++) {
+            Map<String, Object> day = days.get(i);
+            day.put("date", range.start().plusDays(i).toString());
+            day.put("label", formatTripDayLabel(i, request.getLanguage()));
+        }
+        if (before != days.size() || days.stream().anyMatch(d -> {
+            Object s = d.get("slots");
+            return !(s instanceof List<?>) || ((List<?>) s).isEmpty();
+        })) {
+            log.info("[AI] aligned trip days: {} -> {} calendar day(s)", before, days.size());
+        }
+        fillEmptyDaySlotsFromCandidates(days, candidates);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> ensureMutableSlotList(Map<String, Object> day) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        Object s = day.get("slots");
+        if (s instanceof List<?> lst) {
+            for (Object o : lst) {
+                if (o instanceof Map<?, ?> m) {
+                    out.add((Map<String, Object>) m);
+                }
+            }
+        }
+        day.put("slots", out);
+        return out;
+    }
+
+    private void fillEmptyDaySlotsFromCandidates(List<Map<String, Object>> days, ArrayNode candidates) {
+        if (candidates == null || candidates.isEmpty() || days == null || days.isEmpty()) {
             return;
         }
-        for (int i = 0; i < dayList.size(); i++) {
-            Object dayRaw = dayList.get(i);
-            if (!(dayRaw instanceof Map<?, ?> dayMap)) {
+        Set<String> used = new HashSet<>(collectAllPlaceNames(days));
+        int seed = 0;
+        String[] types = {"오전 코스", "점심", "오후 코스"};
+        for (Map<String, Object> day : days) {
+            List<Map<String, Object>> slots = ensureMutableSlotList(day);
+            if (!slots.isEmpty()) {
                 continue;
             }
-            Map<String, Object> day = (Map<String, Object>) dayMap;
-            LocalDate dayDate = i < span
-                    ? range.start().plusDays(i)
-                    : range.end();
-            day.put("date", dayDate.toString());
+            for (String typ : types) {
+                boolean meal = isMealSlot(typ, typ);
+                JsonNode c = findPreferredCandidate(candidates, used, seed, meal, !meal, typ, typ);
+                seed += 7;
+                if (c == null) {
+                    continue;
+                }
+                String pn = c.path("n").asText("").trim();
+                if (pn.isBlank()) {
+                    continue;
+                }
+                Map<String, Object> slot = new LinkedHashMap<>();
+                slot.put("type", typ);
+                slot.put("label", typ);
+                slot.put("placeName", pn);
+                slot.put("address", c.path("a").asText(""));
+                slot.put("reason", "");
+                putSlotCoordinates(slot, c);
+                putSlotSourceInfo(slot, c);
+                used.add(pn.toLowerCase());
+                slots.add(slot);
+            }
         }
+    }
+
+    private int countTotalSlots(List<Map<String, Object>> days) {
+        int n = 0;
+        if (days == null) {
+            return 0;
+        }
+        for (Map<String, Object> day : days) {
+            Object s = day.get("slots");
+            if (s instanceof List<?> lst) {
+                n += lst.size();
+            }
+        }
+        return n;
     }
 
     private boolean isEventDoc(RagSearchService.RagDocumentContext doc) {
@@ -979,6 +1118,12 @@ public class GroqChatService {
             }
         }
 
+        // RAG 일수·쿼터는 search() 문자열에서만 날짜를 파싱하므로, tripStart/tripEnd·히스토리만 있을 때도 구간이 들어가게 한다.
+        TripDateRange tripForRag = resolveTripDateRange(request);
+        if (tripForRag != null) {
+            parts.add("%s ~ %s".formatted(tripForRag.start(), tripForRag.end()));
+        }
+
         parts.add(request.getMessage());
         return String.join("\n", parts);
     }
@@ -1024,17 +1169,23 @@ public class GroqChatService {
 
             Map<String, Object> structured = new LinkedHashMap<>(response.getStructured());
             Object daysObj = structured.get("days");
-            if (!(daysObj instanceof List<?> dayList) || dayList.isEmpty()) return response;
+            if (!(daysObj instanceof List<?> dayListRaw)) {
+                return response;
+            }
+            List<Map<String, Object>> days = normalizeDaysToMutableList(dayListRaw);
+            structured.put("days", days);
+            if (days.isEmpty() && expectedInclusiveCalendarDays(request) == null) {
+                return response;
+            }
+            ensureTripCalendarShape(days, request, candidates);
 
-            normalizeStructuredDayDates(dayList, request);
-
-            int candidateIndex = 0;
-            Set<String> usedPlaceNames = new HashSet<>();
-            for (Object dayRaw : dayList) {
-                if (!(dayRaw instanceof Map<?, ?> dayMap)) continue;
-                Map<String, Object> day = (Map<String, Object>) dayMap;
+            int candidateIndex = countTotalSlots(days);
+            Set<String> usedPlaceNames = new HashSet<>(collectAllPlaceNames(days));
+            for (Map<String, Object> day : days) {
                 Object slotsObj = day.get("slots");
-                if (!(slotsObj instanceof List<?> slotList)) continue;
+                if (!(slotsObj instanceof List<?> slotList)) {
+                    continue;
+                }
 
                 for (int i = 0; i < slotList.size(); i++) {
                     Object slotRaw = slotList.get(i);
@@ -1100,12 +1251,12 @@ public class GroqChatService {
                     }
                 }
             }
-            applyFlightTimeWindow(dayList, request);
-            optimizeDailyTravel(dayList, candidates);
-            optimizeCrossDayTravel(dayList, candidates);
-            optimizeDailyTravel(dayList, candidates);
-            localizeSlotsBySource(dayList, request.getLanguage());
-            clearAllSlotReasons(dayList);
+            applyFlightTimeWindow(days, request);
+            optimizeDailyTravel(days, candidates);
+            optimizeCrossDayTravel(days, candidates);
+            optimizeDailyTravel(days, candidates);
+            localizeSlotsBySource(days, request.getLanguage());
+            clearAllSlotReasons(days);
             return new AiChatResponse(response.getAnswer(), structured, response.getModel());
         } catch (Exception e) {
             log.warn("[AI] ensureStructuredQuality 실패, 원본 반환: {}", e.getMessage());

@@ -32,6 +32,12 @@ public class AiChatRequest {
      */
     private List<Long> savedCourseIds;
 
+    /**
+     * 여행 캘린더(YYYY-MM-DD). 프론트가 내면 메시지·히스토리 파싱보다 우선한다.
+     */
+    private String tripStart;
+    private String tripEnd;
+
     @Getter
     @Setter
     @NoArgsConstructor
