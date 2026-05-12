@@ -21,9 +21,9 @@ import java.util.regex.Pattern;
 public class RagSearchService {
 
     private static final int MAX_KEYWORD_COUNT = 16;
-    /** 식당·관광 후보: 일수당 각 5건 (프롬프트·토큰 부담 완화) */
-    private static final int PER_DAY_RESTAURANT = 5;
-    private static final int PER_DAY_ATTRACTION = 5;
+    /** 식당·관광 후보: 일수당 각 3건 (하루 6건, Groq 컨텍스트 절약) */
+    private static final int PER_DAY_RESTAURANT = 3;
+    private static final int PER_DAY_ATTRACTION = 3;
     /** 입력 기간 파싱 상한 (비정상 메시지·과도한 SQL limit 방지) */
     private static final int MAX_TRIP_DAYS = 21;
     /** scored CTE에서 가져오는 최대 행 수 (다양화 전 풀) */
@@ -65,7 +65,10 @@ public class RagSearchService {
 
         int tripDays = estimateTripDays(message);
         int resultLimit = resultLimitFor(tripDays);
-        int candidateLimit = Math.min(MAX_CANDIDATE_COUNT, Math.max(80, (int) Math.ceil(resultLimit * 2.5)));
+        // Groq에는 resultLimit만 넘기지만, 여기서는 정렬·diversify에 쓸 충분한 scored 행을 가져와야 함(짧은 일정에서도 품질 유지).
+        int candidateLimit = Math.min(
+                MAX_CANDIDATE_COUNT,
+                Math.max(180, (int) Math.ceil(resultLimit * 10.0)));
         String transportPreference = resolveTransportPreference(message);
         Set<String> companionPreferences = resolveCompanionPreferences(message);
         int groupSize = estimateGroupSize(message);
@@ -201,7 +204,7 @@ public class RagSearchService {
                       on pe.source_type = rd.source_type
                      and pe.source_id = rd.source_id
                     where rd.lang_code in (:langCodes)
-                      and lower(coalesce(rd.source_type, '')) not like '%locker%'
+                      and lower(coalesce(rd.source_type, '')) not like '%%locker%%'
                       and (%s)
                 ),
                 max_match as (
@@ -289,7 +292,7 @@ public class RagSearchService {
 
         addCategoryResults(candidates, selected, selectedIds, "restaurant", restaurantLimitFor(tripDays), resultLimit);
         addCategoryResults(candidates, selected, selectedIds, "attraction", attractionLimitFor(tripDays), resultLimit);
-        int ancillaryLimit = ancillaryCategoryLimit(tripDays);
+        int ancillaryLimit = ancillaryCategoryLimit();
         addCategoryResults(candidates, selected, selectedIds, "night", ancillaryLimit, resultLimit);
         addCategoryResults(candidates, selected, selectedIds, "event", ancillaryLimit, resultLimit);
         addCategoryResults(candidates, selected, selectedIds, "shopping_kpop", ancillaryLimit, resultLimit);
@@ -398,21 +401,17 @@ public class RagSearchService {
 
     /**
      * diversify 단계에서 선택할 최대 문서 수.
-     * 식당·관광(일수×10) + 야경·행사·쇼핑(일수 기반, 상한). 락커는 RAG에 넣지 않음(앱에서 nearest API).
+     * 식당·관광만: 일수당 (식3 + 관3) = 6×일수. 야경·행사·쇼핑은 Groq 컨텍스트 절약을 위해 넣지 않음.
      */
     private int resultLimitFor(int tripDays) {
         int t = clampTripDays(tripDays);
-        int restaurants = PER_DAY_RESTAURANT * t;
-        int attractions = PER_DAY_ATTRACTION * t;
-        int anc = ancillaryCategoryLimit(tripDays);
-        int budget = restaurants + attractions + 3 * anc;
-        return Math.min(MAX_RESULT_CAP, Math.max(12, budget));
+        int perDay = PER_DAY_RESTAURANT + PER_DAY_ATTRACTION;
+        return Math.min(MAX_RESULT_CAP, Math.max(perDay, perDay * t));
     }
 
-    /** 야경·행사·K-pop/쇼핑: 짧은 일정은 최소 2, 길어지면 일수까지 늘리되 과도한 비중은 10건으로 캡 */
-    private int ancillaryCategoryLimit(int tripDays) {
-        int t = clampTripDays(tripDays);
-        return Math.max(2, Math.min(t, 10));
+    /** 야경·행사·K-pop/쇼핑: AI 프롬프트용 RAG에서는 사용하지 않음(0). */
+    private int ancillaryCategoryLimit() {
+        return 0;
     }
 
     private int restaurantLimitFor(int tripDays) {
