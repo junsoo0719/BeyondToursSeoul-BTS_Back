@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 
 @Repository
@@ -33,4 +34,25 @@ public interface TourApiEventRepository extends JpaRepository<TourApiEvent, Long
      */
     @Query("SELECT e FROM TourApiEvent e WHERE e.eventEndDate >= :today")
     Page<TourApiEvent> findValidEventsPage(@Param("today") String today, Pageable pageable);
+
+    /**
+     * 기준점에서 가장 가까운 '아직 종료되지 않은' 행사(content_id). 좌표가 있는 행사만.
+     * PostGIS geography 거리(m) 기준.
+     */
+    @Query(value = """
+            SELECT e.content_id FROM tour_api_event e
+            WHERE e.map_x IS NOT NULL AND e.map_y IS NOT NULL
+              AND e.event_end_date IS NOT NULL AND e.event_end_date >= :today
+              AND e.content_id NOT IN (:excludeIds)
+            ORDER BY ST_Distance(
+                ST_SetSRID(ST_MakePoint(e.map_x, e.map_y), 4326)::geography,
+                ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+            )
+            LIMIT 1
+            """, nativeQuery = true)
+    List<Long> findNearestValidEventContentIdExcluding(
+            @Param("lon") double lon,
+            @Param("lat") double lat,
+            @Param("today") String today,
+            @Param("excludeIds") Collection<Long> excludeIds);
 }

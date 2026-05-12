@@ -1,12 +1,16 @@
 package com.beyondtoursseoul.bts.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.util.List;
 
 @Getter
+@Setter
 @NoArgsConstructor
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class AiChatRequest {
     private String message;
     private String language;
@@ -18,8 +22,26 @@ public class AiChatRequest {
      */
     private Integer localRatio;
 
+    /**
+     * AI 일정에 반영할 저장 관광지 PK 목록(프론트에서 체크한 항목). 인증된 사용자의 저장함에 실제 있는 ID만 서버에서 반영한다.
+     */
+    private List<Long> savedAttractionIds;
+
+    /**
+     * AI 일정에 반영할 저장 공식 코스 PK 목록.
+     */
+    private List<Long> savedCourseIds;
+
+    /**
+     * 여행 캘린더(YYYY-MM-DD). 프론트가 내면 메시지·히스토리 파싱보다 우선한다.
+     */
+    private String tripStart;
+    private String tripEnd;
+
     @Getter
+    @Setter
     @NoArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ChatHistoryMessage {
         private String role;
         private String content;

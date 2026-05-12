@@ -42,6 +42,9 @@ spring:
 server:
   address: 0.0.0.0
   port: ${PORT:8080}
+  # JSON AI 챗 등 POST 본문이 길어질 때 Tomcat 413 방지(기본 2MB 근처에서 걸리는 환경 대비)
+  tomcat:
+    max-http-form-post-size: 10MB
 
 frontend:
   allowed-origins: ${FRONTEND_ALLOWED_ORIGINS}
@@ -66,7 +69,17 @@ groq:
     key: ${GROQ_API_KEY:}
     base-url: ${GROQ_API_BASE_URL:https://api.groq.com/openai/v1}
     model: ${GROQ_MODEL:llama-3.1-8b-instant}
-    fallback-model: ${GROQ_FALLBACK_MODEL:}
+    # 무료/온디맨드 TPM: 입력+max 출력 예약. 단일 Groq 호출이므로 .env에서 토큰·RAG 상한 조정 권장
+    max-completion-tokens: ${GROQ_MAX_COMPLETION_TOKENS:800}
+    # RAG 검색 결과 상한(일수×6건 등). Groq 입력은 rag-document-cap으로 한 번 더 자름
+    rag-document-cap: ${GROQ_RAG_DOCUMENT_CAP:22}
+    # 프롬프트 토큰 절약(전체 candidateArray·후처리는 유지, LLM에 보내는 문자열만 제한)
+    prompt-max-candidates: ${GROQ_PROMPT_MAX_CANDIDATES:28}
+    prompt-max-history-messages: ${GROQ_PROMPT_MAX_HISTORY_MESSAGES:6}
+    prompt-max-history-chars: ${GROQ_PROMPT_MAX_HISTORY_CHARS:380}
+    prompt-max-user-chars: ${GROQ_PROMPT_MAX_USER_CHARS:2600}
+    prompt-max-places: ${GROQ_PROMPT_MAX_PLACES:4}
+    prompt-max-place-info-chars: ${GROQ_PROMPT_MAX_PLACE_INFO_CHARS:48}
 
 rag:
   search:

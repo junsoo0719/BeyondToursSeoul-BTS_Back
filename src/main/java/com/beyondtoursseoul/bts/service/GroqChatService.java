@@ -2,17 +2,27 @@ package com.beyondtoursseoul.bts.service;
 
 import com.beyondtoursseoul.bts.domain.Attraction;
 import com.beyondtoursseoul.bts.domain.AttractionTranslation;
+import com.beyondtoursseoul.bts.domain.Profile;
+import com.beyondtoursseoul.bts.domain.course.CourseItemType;
+import com.beyondtoursseoul.bts.domain.course.TourCourse;
+import com.beyondtoursseoul.bts.domain.course.TourCourseItem;
+import com.beyondtoursseoul.bts.domain.course.UserSavedCourse;
 import com.beyondtoursseoul.bts.domain.locker.Locker;
 import com.beyondtoursseoul.bts.domain.locker.LockerTranslation;
+import com.beyondtoursseoul.bts.domain.saved.UserSavedAttraction;
 import com.beyondtoursseoul.bts.domain.tour.TourApiEvent;
 import com.beyondtoursseoul.bts.domain.tour.TourApiEventTranslation;
 import com.beyondtoursseoul.bts.domain.tour.TourLanguage;
 import com.beyondtoursseoul.bts.dto.AiChatRequest;
 import com.beyondtoursseoul.bts.dto.AiChatResponse;
+import com.beyondtoursseoul.bts.repository.ProfileRepository;
 import com.beyondtoursseoul.bts.repository.AttractionRepository;
 import com.beyondtoursseoul.bts.repository.AttractionTranslationRepository;
+import com.beyondtoursseoul.bts.repository.course.TourCourseItemRepository;
+import com.beyondtoursseoul.bts.repository.course.UserSavedCourseRepository;
 import com.beyondtoursseoul.bts.repository.locker.LockerRepository;
 import com.beyondtoursseoul.bts.repository.locker.LockerTranslationRepository;
+import com.beyondtoursseoul.bts.repository.saved.UserSavedAttractionRepository;
 import com.beyondtoursseoul.bts.repository.tour.TourApiEventRepository;
 import com.beyondtoursseoul.bts.repository.tour.TourApiEventTranslationRepository;
 import com.beyondtoursseoul.bts.service.rag.RagSearchService;
@@ -27,25 +37,39 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
-
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
 public class GroqChatService {
-    private static final int RAG_CONTEXT_LIMIT = 12;
-    private static final int CANDIDATE_LIMIT_MIN = 20;
-    private static final int CANDIDATE_LIMIT_MAX = 200;
+    private static final int CANDIDATE_LIMIT_MIN = 12;
+    private static final int CANDIDATE_LIMIT_MAX = 56;
+    /** 저장 반영: 요청 ID·프롬프트 줄/필드/전체 글자 상한 (컨텍스트 비대화). */
+    private static final int USER_SAVED_REQUEST_ID_CAP = 24;
+    private static final int USER_SAVED_PROMPT_MAX_ATTR_ROWS = 10;
+    private static final int USER_SAVED_PROMPT_MAX_COURSE_ROWS = 6;
+    private static final int USER_SAVED_PROMPT_FIELD_CHARS = 96;
+    private static final int USER_SAVED_PROMPT_TOTAL_CHARS = 2000;
+    /** 저장 공식 코스에서 CANDIDATES로 끌어올 관광지 스팟 상한(코스당 순서 유지·중복 제거) */
+    private static final int SAVED_COURSE_SPOT_ATTRACTION_CAP = 20;
+    /** 저장 공식 코스에서 CANDIDATES로 끌어올 행사 스팟 상한 */
+    private static final int SAVED_COURSE_SPOT_EVENT_CAP = 20;
     private static final int MAX_TRAVEL_MINUTES = 45;
     private static final double CITY_SPEED_KMH = 18.0;
     private static final Pattern PLACE_NAME_PATTERN = Pattern.compile("장소명\\s*:\\s*([^\\n\\r]+)");
@@ -78,6 +102,10 @@ public class GroqChatService {
     private final TourApiEventTranslationRepository tourApiEventTranslationRepository;
     private final LockerRepository lockerRepository;
     private final LockerTranslationRepository lockerTranslationRepository;
+    private final ProfileRepository profileRepository;
+    private final UserSavedAttractionRepository userSavedAttractionRepository;
+    private final UserSavedCourseRepository userSavedCourseRepository;
+    private final TourCourseItemRepository tourCourseItemRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Value("${groq.api.key:}")
@@ -86,8 +114,32 @@ public class GroqChatService {
     @Value("${groq.api.model:llama-3.1-8b-instant}")
     private String model;
 
-    @Value("${groq.api.fallback-model:}")
-    private String fallbackModel;
+    /** 완성 토큰 상한(TPM·비용). application.yml groq.api.max-completion-tokens */
+    @Value("${groq.api.max-completion-tokens:850}")
+    private int maxCompletionTokens;
+
+    /** LLM 프롬프트에 실을 CANDIDATES 최대 개수(전체 배열·후처리는 그대로) */
+    @Value("${groq.api.prompt-max-candidates:34}")
+    private int promptMaxCandidates;
+
+    @Value("${groq.api.prompt-max-history-messages:6}")
+    private int promptMaxHistoryMessages;
+
+    @Value("${groq.api.prompt-max-history-chars:380}")
+    private int promptMaxHistoryChars;
+
+    @Value("${groq.api.prompt-max-user-chars:2600}")
+    private int promptMaxUserChars;
+
+    @Value("${groq.api.prompt-max-places:4}")
+    private int promptMaxPlaces;
+
+    @Value("${groq.api.prompt-max-place-info-chars:48}")
+    private int promptMaxPlaceInfoChars;
+
+    /** RAG 검색 후 코스 후보로 쓸 문서 최대 개수(단일 Groq 호출용 입력 절약) */
+    @Value("${groq.api.rag-document-cap:22}")
+    private int ragDocumentCap;
 
     public GroqChatService(
             RagSearchService ragSearchService,
@@ -97,6 +149,10 @@ public class GroqChatService {
             TourApiEventTranslationRepository tourApiEventTranslationRepository,
             LockerRepository lockerRepository,
             LockerTranslationRepository lockerTranslationRepository,
+            ProfileRepository profileRepository,
+            UserSavedAttractionRepository userSavedAttractionRepository,
+            UserSavedCourseRepository userSavedCourseRepository,
+            TourCourseItemRepository tourCourseItemRepository,
             @Value("${groq.api.base-url:https://api.groq.com/openai/v1}") String baseUrl
     ) {
         this.ragSearchService = ragSearchService;
@@ -106,12 +162,18 @@ public class GroqChatService {
         this.tourApiEventTranslationRepository = tourApiEventTranslationRepository;
         this.lockerRepository = lockerRepository;
         this.lockerTranslationRepository = lockerTranslationRepository;
+        this.profileRepository = profileRepository;
+        this.userSavedAttractionRepository = userSavedAttractionRepository;
+        this.userSavedCourseRepository = userSavedCourseRepository;
+        this.tourCourseItemRepository = tourCourseItemRepository;
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .build();
     }
 
-    public AiChatResponse chat(AiChatRequest request) {
+    /** readOnly 아님: 저장 코스 검증 시 profiles 행이 없으면 생성한다. */
+    @Transactional
+    public AiChatResponse chat(AiChatRequest request, UUID authenticatedUserId) {
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("GROQ_API_KEY가 설정되어 있지 않습니다.");
         }
@@ -120,24 +182,53 @@ public class GroqChatService {
             throw new IllegalStateException("message는 필수입니다.");
         }
 
-        List<RagSearchService.RagDocumentContext> ragDocs = searchRagDocuments(request);
+        if (authenticatedUserId == null && hasNonEmptySavedSelections(request)) {
+            log.debug("[AI] 저장 항목 ID가 요청에 포함되었으나 인증 사용자가 없어 무시합니다.");
+        }
+
+        List<Attraction> validatedSavedAttractions =
+                resolveValidatedSavedAttractions(authenticatedUserId, request.getSavedAttractionIds());
+        List<TourCourse> validatedSavedCourses =
+                resolveValidatedSavedCourses(authenticatedUserId, request.getSavedCourseIds());
+        List<Attraction> courseSpotAttractions = resolveAttractionsFromSavedCourses(validatedSavedCourses);
+        List<TourApiEvent> courseSpotEvents = resolveEventsFromSavedCourses(validatedSavedCourses);
+        Map<Long, TourApiEventTranslation> courseEventTitles =
+                loadPreferredEventTranslations(courseSpotEvents);
+        String userSavedBlock = buildUserSavedSelectionsSystemContent(validatedSavedAttractions, validatedSavedCourses);
+
+        List<RagSearchService.RagDocumentContext> ragDocs = searchRagDocuments(request, validatedSavedCourses);
+        ragDocs = interleaveRestaurantAttractionForPrompt(ragDocs);
+        int ragCap = Math.max(10, Math.min(ragDocumentCap, 80));
+        if (ragDocs.size() > ragCap) {
+            log.info("[AI] RAG 문서 {}건 → 단일 Groq 호출용 {}건으로 제한", ragDocs.size(), ragCap);
+            ragDocs = new ArrayList<>(ragDocs.subList(0, ragCap));
+        }
         String ragContext = createRagContext(ragDocs);
         ArrayNode candidateArray = buildCandidateArray(ragDocs, request);
+        int docCandidateLimit = candidateArrayLimit(ragDocs);
+        int mergeCap = Math.min(
+                CANDIDATE_LIMIT_MAX,
+                docCandidateLimit
+                        + courseSpotAttractions.size()
+                        + courseSpotEvents.size()
+                        + validatedSavedAttractions.size()
+        );
+        Map<String, Boolean> dedupe = dedupePlaceNamesFromCandidates(candidateArray);
+        mergeUserSavedAttractionsIntoCandidates(candidateArray, courseSpotAttractions, dedupe, mergeCap, true);
+        mergeUserSavedAttractionsIntoCandidates(candidateArray, validatedSavedAttractions, dedupe, mergeCap, false);
+        mergeUserSavedEventsIntoCandidates(
+                candidateArray, courseSpotEvents, courseEventTitles, dedupe, mergeCap);
+        trimCandidateArrayToMax(candidateArray, mergeCap);
 
-        String rawContent = requestCompletion(request, model, false, ragContext, candidateArray);
+        String rawContent = requestCompletion(request, model, false, ragContext, candidateArray, userSavedBlock);
         log.info("[AI] model={}, rawResponse={}", model, truncateForLog(rawContent, 3000));
         AiChatResponse parsed = parseAiChatResponse(rawContent, model);
         parsed = ensureStructuredQuality(parsed, candidateArray, request);
 
-        if (needsRetry(parsed)) {
-            String retryModel = (fallbackModel != null && !fallbackModel.isBlank()) ? fallbackModel : model;
-            String retryContent = requestCompletion(request, retryModel, true, ragContext, candidateArray);
-            log.info("[AI] retry model={}, rawResponse={}", retryModel, truncateForLog(retryContent, 3000));
-            AiChatResponse retried = parseAiChatResponse(retryContent, retryModel);
-            retried = ensureStructuredQuality(retried, candidateArray, request);
-            if (!needsRetry(retried)) {
-                parsed = retried;
-            }
+        if (needsRetry(parsed, request)) {
+            log.warn(
+                    "[AI] 첫 응답이 품질·일차 기준에 못 미치지만, 정책상 Groq는 요청당 1회만 호출합니다(추가 재생성·429 재시도 없음)."
+            );
         }
 
         log.info(
@@ -148,8 +239,414 @@ public class GroqChatService {
         return parsed;
     }
 
-    private List<RagSearchService.RagDocumentContext> searchRagDocuments(AiChatRequest request) {
-        String searchQuery = createRagSearchQuery(request);
+    private static boolean hasNonEmptySavedSelections(AiChatRequest request) {
+        return (request.getSavedAttractionIds() != null && !request.getSavedAttractionIds().isEmpty())
+                || (request.getSavedCourseIds() != null && !request.getSavedCourseIds().isEmpty());
+    }
+
+    /** 요청 순서 유지, 중복 제거, 최대 {@link #USER_SAVED_REQUEST_ID_CAP}개. */
+    private static List<Long> capSavedRequestIds(List<Long> requestedIds) {
+        if (requestedIds == null || requestedIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> idOrder = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        for (Long id : requestedIds) {
+            if (id == null || seen.contains(id)) {
+                continue;
+            }
+            seen.add(id);
+            idOrder.add(id);
+            if (idOrder.size() >= USER_SAVED_REQUEST_ID_CAP) {
+                break;
+            }
+        }
+        return idOrder;
+    }
+
+    private List<Attraction> resolveValidatedSavedAttractions(UUID userId, List<Long> requestedIds) {
+        if (userId == null || requestedIds == null || requestedIds.isEmpty()) {
+            return List.of();
+        }
+        Profile user = profileRepository.findById(userId)
+                .orElseGet(() -> profileRepository.save(Profile.createForUser(userId)));
+        List<Long> idOrder = capSavedRequestIds(requestedIds);
+        if (idOrder.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> want = new LinkedHashSet<>(idOrder);
+        Map<Long, Attraction> byId = userSavedAttractionRepository.findByUserOrderBySavedAtDesc(user).stream()
+                .map(UserSavedAttraction::getAttraction)
+                .filter(Objects::nonNull)
+                .filter(a -> want.contains(a.getId()))
+                .collect(Collectors.toMap(Attraction::getId, a -> a, (a, b) -> a));
+        List<Attraction> ordered = new ArrayList<>();
+        for (Long id : idOrder) {
+            Attraction a = byId.get(id);
+            if (a != null) {
+                ordered.add(a);
+            }
+        }
+        return ordered;
+    }
+
+    private List<TourCourse> resolveValidatedSavedCourses(UUID userId, List<Long> requestedIds) {
+        if (userId == null || requestedIds == null || requestedIds.isEmpty()) {
+            return List.of();
+        }
+        Profile user = profileRepository.findById(userId)
+                .orElseGet(() -> profileRepository.save(Profile.createForUser(userId)));
+        List<Long> idOrder = capSavedRequestIds(requestedIds);
+        if (idOrder.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> want = new LinkedHashSet<>(idOrder);
+        Map<Long, TourCourse> byId = userSavedCourseRepository.findByUserOrderBySavedAtDesc(user).stream()
+                .map(UserSavedCourse::getCourse)
+                .filter(Objects::nonNull)
+                .filter(c -> want.contains(c.getId()))
+                .collect(Collectors.toMap(TourCourse::getId, c -> c, (a, b) -> a));
+        List<TourCourse> ordered = new ArrayList<>();
+        for (Long id : idOrder) {
+            TourCourse c = byId.get(id);
+            if (c != null) {
+                ordered.add(c);
+            }
+        }
+        return ordered;
+    }
+
+    /**
+     * 저장 공식 코스에 포함된 관광지 스팟을 순서대로 모은다(이벤트만 있는 구간은 건너뜀).
+     * 이 목록은 CANDIDATES 선두에 합쳐져 모델이 해시태그 문자열 대신 실제 POI 이름을 쓰도록 돕는다.
+     */
+    private List<Attraction> resolveAttractionsFromSavedCourses(List<TourCourse> courses) {
+        if (courses == null || courses.isEmpty()) {
+            return List.of();
+        }
+        List<Long> courseIds = courses.stream()
+                .map(TourCourse::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (courseIds.isEmpty()) {
+            return List.of();
+        }
+        List<TourCourseItem> rows = tourCourseItemRepository.findByCourseIdInWithSpotsFetchedOrdered(courseIds);
+        List<Attraction> ordered = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        for (TourCourseItem row : rows) {
+            if (ordered.size() >= SAVED_COURSE_SPOT_ATTRACTION_CAP) {
+                break;
+            }
+            if (row.getItemType() != CourseItemType.ATTRACTION) {
+                continue;
+            }
+            Attraction a = row.getAttraction();
+            if (a == null || a.getId() == null || seen.contains(a.getId())) {
+                continue;
+            }
+            seen.add(a.getId());
+            ordered.add(a);
+        }
+        return ordered;
+    }
+
+    /**
+     * 저장 공식 코스에 포함된 행사 스팟을 순서대로 모은다.
+     */
+    private List<TourApiEvent> resolveEventsFromSavedCourses(List<TourCourse> courses) {
+        if (courses == null || courses.isEmpty()) {
+            return List.of();
+        }
+        List<Long> courseIds = courses.stream()
+                .map(TourCourse::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (courseIds.isEmpty()) {
+            return List.of();
+        }
+        List<TourCourseItem> rows = tourCourseItemRepository.findByCourseIdInWithSpotsFetchedOrdered(courseIds);
+        List<TourApiEvent> ordered = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        for (TourCourseItem row : rows) {
+            if (ordered.size() >= SAVED_COURSE_SPOT_EVENT_CAP) {
+                break;
+            }
+            if (row.getItemType() != CourseItemType.EVENT) {
+                continue;
+            }
+            TourApiEvent ev = row.getEvent();
+            if (ev == null || ev.getContentId() == null || seen.contains(ev.getContentId())) {
+                continue;
+            }
+            seen.add(ev.getContentId());
+            ordered.add(ev);
+        }
+        return ordered;
+    }
+
+    /** 코스 행사 제목·주소용 번역(한국어 우선). */
+    private Map<Long, TourApiEventTranslation> loadPreferredEventTranslations(List<TourApiEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return Map.of();
+        }
+        List<TourLanguage> langs = List.of(
+                TourLanguage.KOR,
+                TourLanguage.ENG,
+                TourLanguage.JPN,
+                TourLanguage.CHS,
+                TourLanguage.CHT
+        );
+        Map<Long, TourApiEventTranslation> best = new LinkedHashMap<>();
+        for (TourApiEventTranslation tr : tourApiEventTranslationRepository.findByEventInAndLanguageIn(events, langs)) {
+            if (tr.getEvent() == null || tr.getLanguage() == null) {
+                continue;
+            }
+            Long id = tr.getEvent().getContentId();
+            TourApiEventTranslation existing = best.get(id);
+            if (existing == null || (existing.getLanguage() != TourLanguage.KOR && tr.getLanguage() == TourLanguage.KOR)) {
+                best.put(id, tr);
+            }
+        }
+        return best;
+    }
+
+    private String buildUserSavedSelectionsSystemContent(List<Attraction> attractions, List<TourCourse> courses) {
+        if ((attractions == null || attractions.isEmpty()) && (courses == null || courses.isEmpty())) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("USER_SELECTED_SAVED_LIST:\n");
+        sb.append("- Saved attractions: prefer similar areas/categories from CANDIDATES; at most 1-2 slot overlaps with listed names if natural.\n");
+        if (courses != null && !courses.isEmpty()) {
+            sb.append("MANDATORY_SAVED_OFFICIAL_COURSES: The user explicitly selected the saved official tour course(s) below. ");
+            sb.append("Every POI from those courses that appears in CANDIDATES (same st+sid: attraction or event) MUST appear ");
+            sb.append("at least once in structured.days[].slots across the trip. Do not omit them for style or pacing. ");
+            sb.append("Course title and hashtags are mood/style hints only—never paste them as slot.placeName; ");
+            sb.append("use CANDIDATES[].n for place names.\n");
+        } else {
+            sb.append("- Saved official courses (when listed): title/hashtags are mood hints only; ");
+            sb.append("slot.placeName must match CANDIDATES[].n.\n");
+        }
+        if (attractions != null && !attractions.isEmpty()) {
+            sb.append("Saved attractions (name | address | category):\n");
+            int rows = 0;
+            for (Attraction a : attractions) {
+                if (rows >= USER_SAVED_PROMPT_MAX_ATTR_ROWS) {
+                    break;
+                }
+                sb.append("- ")
+                        .append(savedPromptField(nullToEmpty(a.getName())))
+                        .append(" | ")
+                        .append(savedPromptField(nullToEmpty(a.getAddress())))
+                        .append(" | ")
+                        .append(savedPromptField(nullToEmpty(a.getCategory())))
+                        .append("\n");
+                rows++;
+            }
+        }
+        if (courses != null && !courses.isEmpty()) {
+            sb.append("Selected saved official courses — include all their CANDIDATES POIs (title | hashtags):\n");
+            int rows = 0;
+            for (TourCourse c : courses) {
+                if (rows >= USER_SAVED_PROMPT_MAX_COURSE_ROWS) {
+                    break;
+                }
+                sb.append("- ")
+                        .append(savedPromptField(nullToEmpty(c.getTitle())))
+                        .append(" | ")
+                        .append(savedPromptField(nullToEmpty(c.getHashtags())))
+                        .append("\n");
+                rows++;
+            }
+        }
+        return truncate(sb.toString(), USER_SAVED_PROMPT_TOTAL_CHARS);
+    }
+
+    private String savedPromptField(String raw) {
+        String t = sanitizePromptLine(nullToEmpty(raw));
+        if (t.isEmpty()) {
+            return "";
+        }
+        return truncate(t, USER_SAVED_PROMPT_FIELD_CHARS);
+    }
+
+    private static String sanitizePromptLine(String s) {
+        if (s == null || s.isBlank()) {
+            return "";
+        }
+        return s.replace('\n', ' ').replace('\r', ' ').trim();
+    }
+
+    private static Map<String, Boolean> dedupePlaceNamesFromCandidates(ArrayNode array) {
+        Map<String, Boolean> dedupe = new LinkedHashMap<>();
+        if (array == null) {
+            return dedupe;
+        }
+        for (JsonNode n : array) {
+            String key = n.path("n").asText("").trim().toLowerCase();
+            if (!key.isBlank()) {
+                dedupe.put(key, true);
+            }
+        }
+        return dedupe;
+    }
+
+    private void mergeUserSavedAttractionsIntoCandidates(
+            ArrayNode array,
+            List<Attraction> savedAttractions,
+            Map<String, Boolean> dedupe,
+            int maxTotal,
+            boolean mandatoryFromSavedCourse
+    ) {
+        if (array == null || savedAttractions == null || savedAttractions.isEmpty()) {
+            return;
+        }
+        for (int i = savedAttractions.size() - 1; i >= 0; i--) {
+            if (array.size() >= maxTotal) {
+                break;
+            }
+            Attraction att = savedAttractions.get(i);
+            if (att == null) {
+                continue;
+            }
+            String name = nullToEmpty(att.getName()).trim();
+            if (name.isBlank()) {
+                continue;
+            }
+            String key = name.toLowerCase(Locale.ROOT);
+            if (dedupe.containsKey(key)) {
+                continue;
+            }
+            dedupe.put(key, true);
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("n", name);
+            node.put("a", nullToEmpty(att.getAddress()));
+            node.put("c", nullToEmpty(att.getCategory()));
+            node.put("h", nullToEmpty(att.getOperatingHours()));
+            node.put("st", "attraction");
+            node.put("sid", String.valueOf(att.getId()));
+            if (mandatoryFromSavedCourse) {
+                node.put("mi", true);
+            }
+            if (att.getThumbnail() != null && !att.getThumbnail().isBlank()) {
+                node.put("img", att.getThumbnail());
+            }
+            if (att.getGeom() != null) {
+                node.put("lat", att.getGeom().getY());
+                node.put("lng", att.getGeom().getX());
+            }
+            array.insert(0, node);
+        }
+    }
+
+    private void mergeUserSavedEventsIntoCandidates(
+            ArrayNode array,
+            List<TourApiEvent> events,
+            Map<Long, TourApiEventTranslation> titleByContentId,
+            Map<String, Boolean> dedupe,
+            int maxTotal
+    ) {
+        if (array == null || events == null || events.isEmpty()) {
+            return;
+        }
+        for (int i = events.size() - 1; i >= 0; i--) {
+            if (array.size() >= maxTotal) {
+                break;
+            }
+            TourApiEvent ev = events.get(i);
+            if (ev == null || ev.getContentId() == null) {
+                continue;
+            }
+            TourApiEventTranslation tr = titleByContentId != null ? titleByContentId.get(ev.getContentId()) : null;
+            String name = tr != null ? nullToEmpty(tr.getTitle()).trim() : "";
+            if (name.isBlank()) {
+                name = "Event " + ev.getContentId();
+            }
+            String key = name.toLowerCase(Locale.ROOT);
+            if (dedupe.containsKey(key)) {
+                continue;
+            }
+            dedupe.put(key, true);
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("n", name);
+            String addr = tr != null ? firstNonBlank(tr.getAddress(), tr.getEventPlace()) : "";
+            node.put("a", addr);
+            node.put("c", "event");
+            node.put("h", "");
+            node.put("st", "event");
+            node.put("sid", String.valueOf(ev.getContentId()));
+            node.put("mi", true);
+            String thumb = firstNonBlank(ev.getFirstImage2(), ev.getFirstImage());
+            if (!thumb.isBlank()) {
+                node.put("img", thumb);
+            }
+            if (ev.getMapY() != null) {
+                node.put("lat", ev.getMapY());
+            }
+            if (ev.getMapX() != null) {
+                node.put("lng", ev.getMapX());
+            }
+            array.insert(0, node);
+        }
+    }
+
+    private static void trimCandidateArrayToMax(ArrayNode array, int max) {
+        if (array == null || max <= 0) {
+            return;
+        }
+        while (array.size() > max) {
+            array.remove(array.size() - 1);
+        }
+    }
+
+    /**
+     * RAG diversify 결과가 보통 [식당…][관광…] 순인데, 이후 {@code subList(0, ragCap)}만 하면
+     * 앞쪽이 식당으로만 잘리는 경우가 있어 식당·관광을 한 건씩 교차해 Groq 입력 비중을 맞춘다.
+     */
+    private static List<RagSearchService.RagDocumentContext> interleaveRestaurantAttractionForPrompt(
+            List<RagSearchService.RagDocumentContext> docs) {
+        if (docs == null || docs.isEmpty()) {
+            return docs == null ? List.of() : docs;
+        }
+        List<RagSearchService.RagDocumentContext> restaurants = new ArrayList<>();
+        List<RagSearchService.RagDocumentContext> attractions = new ArrayList<>();
+        List<RagSearchService.RagDocumentContext> others = new ArrayList<>();
+        for (RagSearchService.RagDocumentContext d : docs) {
+            String c = d.category();
+            if ("restaurant".equalsIgnoreCase(c)) {
+                restaurants.add(d);
+            } else if ("attraction".equalsIgnoreCase(c)) {
+                attractions.add(d);
+            } else {
+                others.add(d);
+            }
+        }
+        if (restaurants.isEmpty() || attractions.isEmpty()) {
+            return new ArrayList<>(docs);
+        }
+        List<RagSearchService.RagDocumentContext> out = new ArrayList<>(docs.size());
+        int ri = 0;
+        int ai = 0;
+        while (ri < restaurants.size() || ai < attractions.size()) {
+            if (ri < restaurants.size()) {
+                out.add(restaurants.get(ri++));
+            }
+            if (ai < attractions.size()) {
+                out.add(attractions.get(ai++));
+            }
+        }
+        out.addAll(others);
+        return out;
+    }
+
+    private List<RagSearchService.RagDocumentContext> searchRagDocuments(
+            AiChatRequest request,
+            List<TourCourse> savedCoursesForKeywords
+    ) {
+        String searchQuery = createRagSearchQuery(request, savedCoursesForKeywords);
         String language = request.getLanguage() == null || request.getLanguage().isBlank()
                 ? "ko"
                 : request.getLanguage();
@@ -180,18 +677,33 @@ public class GroqChatService {
         return DEFAULT_LOCAL_RATIO;
     }
 
+    /** Groq 는 HTTP 요청당 1회만 호출(429/TPM 재시도 없음, needsRetry 2차 호출 없음). */
     private String requestCompletion(
             AiChatRequest request,
             String modelName,
             boolean strictMode,
             String ragContext,
-            ArrayNode candidateArray
+            ArrayNode candidateArray,
+            String userSavedBlock
+    ) {
+        return executeGroqChatCompletion(
+                request, modelName, strictMode, ragContext, candidateArray, userSavedBlock
+        );
+    }
+
+    private String executeGroqChatCompletion(
+            AiChatRequest request,
+            String modelName,
+            boolean strictMode,
+            String ragContext,
+            ArrayNode candidateArray,
+            String userSavedBlock
     ) {
         GroqChatResponse response = restClient.post()
                 .uri("/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("Authorization", "Bearer " + apiKey)
-                .body(createRequestBody(request, modelName, strictMode, ragContext, candidateArray))
+                .body(createRequestBody(request, modelName, strictMode, ragContext, candidateArray, userSavedBlock))
                 .retrieve()
                 .body(GroqChatResponse.class);
 
@@ -207,18 +719,20 @@ public class GroqChatService {
             String modelName,
             boolean strictMode,
             String ragContext,
-            ArrayNode candidateArray
+            ArrayNode candidateArray,
+            String userSavedBlock
     ) {
         String language = request.getLanguage() == null || request.getLanguage().isBlank()
                 ? "ko"
                 : request.getLanguage();
 
+        int cappedMaxTokens = Math.max(400, Math.min(2048, maxCompletionTokens));
         return Map.of(
                 "model", modelName,
                 "temperature", strictMode ? 0.0 : 0.2,
-                "max_tokens", 1200,
+                "max_tokens", cappedMaxTokens,
                 "response_format", Map.of("type", "json_object"),
-                "messages", createMessages(request, language, strictMode, ragContext, candidateArray)
+                "messages", createMessages(request, language, strictMode, ragContext, candidateArray, userSavedBlock)
         );
     }
 
@@ -227,7 +741,8 @@ public class GroqChatService {
             String language,
             boolean strictMode,
             String ragContext,
-            ArrayNode candidateArray
+            ArrayNode candidateArray,
+            String userSavedBlock
     ) {
         List<Map<String, String>> messages = new ArrayList<>();
         messages.add(Map.of(
@@ -241,10 +756,21 @@ public class GroqChatService {
             ));
         }
 
+        String tripDayConstraint = buildTripCalendarDayConstraintSystemContent(request);
+        if (tripDayConstraint != null && !tripDayConstraint.isBlank()) {
+            messages.add(Map.of("role", "system", "content", tripDayConstraint));
+        }
+
         if (!ragContext.isBlank()) {
             messages.add(Map.of(
                     "role", "system",
                     "content", ragContext
+            ));
+        }
+        if (userSavedBlock != null && !userSavedBlock.isBlank()) {
+            messages.add(Map.of(
+                    "role", "system",
+                    "content", userSavedBlock
             ));
         }
         messages.add(Map.of(
@@ -256,33 +782,35 @@ public class GroqChatService {
             List<AiChatRequest.ChatHistoryMessage> validHistory = request.getHistory().stream()
                     .filter(this::isValidHistoryMessage)
                     .toList();
-            // 수정 플로우: 최근 대화를 조금 더 유지 (최대 8메시지 ≈ 4턴)
-            int historyLimit = 8;
+            int historyLimit = Math.max(2, Math.min(12, promptMaxHistoryMessages));
+            int historyChars = Math.max(200, Math.min(800, promptMaxHistoryChars));
             int skip = Math.max(0, validHistory.size() - historyLimit);
             validHistory.stream()
                     .skip(skip)
                     .map(history -> Map.of(
                             "role", history.getRole().trim().toLowerCase(),
-                            "content", truncate(history.getContent(), 520)
+                            "content", truncate(history.getContent(), historyChars)
                     ))
                     .forEach(messages::add);
         }
 
+        int userChars = Math.max(800, Math.min(8000, promptMaxUserChars));
         messages.add(Map.of(
                 "role", "user",
-                "content", request.getMessage()
+                "content", truncate(request.getMessage(), userChars)
         ));
 
         return messages;
     }
 
-    // RAG context: 상위 12개, 제목+100자만
+    // RAG context: 상위 N개, 제목+짧은 요약만 (TPM 절약)
     private String createRagContext(List<RagSearchService.RagDocumentContext> documents) {
         if (documents.isEmpty()) {
             return "";
         }
         StringBuilder context = new StringBuilder("PLACES:[");
-        int limit = Math.min(documents.size(), RAG_CONTEXT_LIMIT);
+        int limit = Math.min(documents.size(), Math.max(3, Math.min(12, promptMaxPlaces)));
+        int infoChars = Math.max(32, Math.min(120, promptMaxPlaceInfoChars));
         for (int i = 0; i < limit; i++) {
             RagSearchService.RagDocumentContext doc = documents.get(i);
             if (i > 0) context.append(",");
@@ -294,7 +822,7 @@ public class GroqChatService {
                             slimRagContentForPrompt(nullToEmpty(doc.content()))
                                     .replace("\"", "")
                                     .replace("\n", " "),
-                            100))
+                            infoChars))
                     .append("\"")
                     .append("}");
         }
@@ -302,17 +830,23 @@ public class GroqChatService {
         return context.toString();
     }
 
-    // CANDIDATES: RAG에서 넘어온 문서 수에 맞춰 compact JSON (n/a 키), 상한은 토큰 고려
+    // CANDIDATES: LLM용은 앞쪽 일부 + 짧은 필드만(전체 candidateArray 는 후처리용으로 유지). img URL 은 토큰 폭발 방지로 생략.
     private String createCandidatePrompt(ArrayNode candidates) {
+        int cap = Math.max(8, Math.min(promptMaxCandidates, 120));
         ArrayNode promptCandidates = objectMapper.createArrayNode();
-        for (JsonNode candidate : candidates) {
+        int n = Math.min(candidates == null ? 0 : candidates.size(), cap);
+        if (candidates != null && candidates.size() > cap) {
+            log.debug("[AI] CANDIDATES prompt cap: {} -> {}", candidates.size(), cap);
+        }
+        for (int i = 0; i < n; i++) {
+            JsonNode candidate = candidates.get(i);
             ObjectNode node = promptCandidates.addObject();
-            node.put("n", candidate.path("n").asText(""));
-            node.put("a", candidate.path("a").asText(""));
-            node.put("c", candidate.path("c").asText(""));
-            node.put("h", candidate.path("h").asText(""));
-            node.put("st", candidate.path("st").asText(""));
-            node.put("sid", candidate.path("sid").asText(""));
+            node.put("n", truncate(nullToEmpty(candidate.path("n").asText("")).trim(), 56));
+            node.put("a", truncate(nullToEmpty(candidate.path("a").asText("")).trim(), 72));
+            node.put("c", truncate(nullToEmpty(candidate.path("c").asText("")).trim(), 28));
+            node.put("h", truncate(nullToEmpty(candidate.path("h").asText("")).trim(), 40));
+            node.put("st", truncate(nullToEmpty(candidate.path("st").asText("")).trim(), 24));
+            node.put("sid", truncate(nullToEmpty(candidate.path("sid").asText("")).trim(), 20));
             if (!candidate.path("lat").isMissingNode() && !candidate.path("lat").isNull()) {
                 node.put("lat", candidate.path("lat").asDouble());
             }
@@ -380,16 +914,85 @@ public class GroqChatService {
     }
 
     private TripDateRange resolveTripDateRange(AiChatRequest request) {
-        if (request == null) return null;
+        if (request == null) {
+            return null;
+        }
+        TripDateRange explicit = tripRangeFromExplicitFields(request);
+        if (explicit != null) {
+            return explicit;
+        }
         TripDateRange fromMessage = extractDateRange(request.getMessage());
-        if (fromMessage != null) return fromMessage;
-        if (request.getHistory() == null) return null;
+        if (fromMessage != null) {
+            return fromMessage;
+        }
+        if (request.getHistory() == null) {
+            return null;
+        }
         for (AiChatRequest.ChatHistoryMessage historyMessage : request.getHistory()) {
-            if (!isValidHistoryMessage(historyMessage)) continue;
+            if (!isValidHistoryMessage(historyMessage)) {
+                continue;
+            }
             TripDateRange fromHistory = extractDateRange(historyMessage.getContent());
-            if (fromHistory != null) return fromHistory;
+            if (fromHistory != null) {
+                return fromHistory;
+            }
         }
         return null;
+    }
+
+    private TripDateRange tripRangeFromExplicitFields(AiChatRequest request) {
+        String a = request.getTripStart();
+        String b = request.getTripEnd();
+        if (a == null || b == null || a.isBlank() || b.isBlank()) {
+            return null;
+        }
+        try {
+            LocalDate start = LocalDate.parse(a.trim());
+            LocalDate end = LocalDate.parse(b.trim());
+            if (end.isBefore(start)) {
+                return null;
+            }
+            long span = ChronoUnit.DAYS.between(start, end) + 1;
+            if (span < 1 || span > 21) {
+                return null;
+            }
+            return new TripDateRange(start, end);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * 요약/히스토리/메시지의 {@code YYYY-MM-DD ~ YYYY-MM-DD} 구간에 따른 달력 일수(양 끝 포함).
+     * {@link RagSearchService} 의 {@code MAX_TRIP_DAYS} 와 맞춤.
+     */
+    private Integer expectedInclusiveCalendarDays(AiChatRequest request) {
+        TripDateRange range = resolveTripDateRange(request);
+        if (range == null) {
+            return null;
+        }
+        long days = ChronoUnit.DAYS.between(range.start(), range.end()) + 1;
+        if (days < 1 || days > 21) {
+            return null;
+        }
+        return (int) days;
+    }
+
+    private String buildTripCalendarDayConstraintSystemContent(AiChatRequest request) {
+        Integer n = expectedInclusiveCalendarDays(request);
+        if (n == null) {
+            return "";
+        }
+        TripDateRange range = resolveTripDateRange(request);
+        if (range == null) {
+            return "";
+        }
+        return """
+                TRIP_CALENDAR_DAYS: The user's trip spans exactly %d calendar day(s), inclusive from %s to %s.
+                The JSON "days" array MUST contain exactly %d objects (one per calendar day, in order).
+                Each object must have a "date" (YYYY-MM-DD matching that calendar day), a "label", and a non-empty "slots" array.
+                Do not merge two calendar days into one; do not omit a middle day even if slots are light.
+                """.formatted(n, range.start(), range.end(), n);
     }
 
     private TripDateRange extractDateRange(String value) {
@@ -404,6 +1007,136 @@ public class GroqChatService {
         } catch (RuntimeException ignored) {
             return null;
         }
+    }
+
+    /**
+     * 모델이 낸 days를 가변 리스트로 바꾼 뒤, 요청 캘린더 일수에 맞게 자르거나 패딩하고
+     * 빈 일차는 후보에서 최소 슬롯을 채운다.
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> normalizeDaysToMutableList(List<?> raw) {
+        List<Map<String, Object>> days = new ArrayList<>();
+        if (raw != null) {
+            for (Object o : raw) {
+                if (o instanceof Map<?, ?> m) {
+                    days.add((Map<String, Object>) m);
+                }
+            }
+        }
+        return days;
+    }
+
+    private String formatTripDayLabel(int zeroBasedIndex, String language) {
+        int n = zeroBasedIndex + 1;
+        String lang = language == null ? "" : language.trim().toLowerCase();
+        if (lang.startsWith("en")) {
+            return "Day " + n;
+        }
+        if (lang.startsWith("ja")) {
+            return n + "日目";
+        }
+        if (lang.startsWith("zh")) {
+            return "第" + n + "天";
+        }
+        return n + "일차";
+    }
+
+    private void ensureTripCalendarShape(List<Map<String, Object>> days, AiChatRequest request, ArrayNode candidates) {
+        TripDateRange range = resolveTripDateRange(request);
+        Integer expected = expectedInclusiveCalendarDays(request);
+        if (range == null || expected == null) {
+            return;
+        }
+        int before = days.size();
+        while (days.size() < expected) {
+            int idx = days.size();
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("date", range.start().plusDays(idx).toString());
+            d.put("label", formatTripDayLabel(idx, request.getLanguage()));
+            d.put("slots", new ArrayList<>());
+            days.add(d);
+        }
+        while (days.size() > expected) {
+            days.remove(days.size() - 1);
+        }
+        for (int i = 0; i < days.size(); i++) {
+            Map<String, Object> day = days.get(i);
+            day.put("date", range.start().plusDays(i).toString());
+            day.put("label", formatTripDayLabel(i, request.getLanguage()));
+        }
+        if (before != days.size() || days.stream().anyMatch(d -> {
+            Object s = d.get("slots");
+            return !(s instanceof List<?>) || ((List<?>) s).isEmpty();
+        })) {
+            log.info("[AI] aligned trip days: {} -> {} calendar day(s)", before, days.size());
+        }
+        fillEmptyDaySlotsFromCandidates(days, candidates);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> ensureMutableSlotList(Map<String, Object> day) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        Object s = day.get("slots");
+        if (s instanceof List<?> lst) {
+            for (Object o : lst) {
+                if (o instanceof Map<?, ?> m) {
+                    out.add((Map<String, Object>) m);
+                }
+            }
+        }
+        day.put("slots", out);
+        return out;
+    }
+
+    private void fillEmptyDaySlotsFromCandidates(List<Map<String, Object>> days, ArrayNode candidates) {
+        if (candidates == null || candidates.isEmpty() || days == null || days.isEmpty()) {
+            return;
+        }
+        Set<String> used = new HashSet<>(collectAllPlaceNames(days));
+        int seed = 0;
+        String[] types = {"오전 코스", "점심", "오후 코스"};
+        for (Map<String, Object> day : days) {
+            List<Map<String, Object>> slots = ensureMutableSlotList(day);
+            if (!slots.isEmpty()) {
+                continue;
+            }
+            for (String typ : types) {
+                boolean meal = isMealSlot(typ, typ);
+                JsonNode c = findPreferredCandidate(candidates, used, seed, meal, !meal, typ, typ);
+                seed += 7;
+                if (c == null) {
+                    continue;
+                }
+                String pn = c.path("n").asText("").trim();
+                if (pn.isBlank()) {
+                    continue;
+                }
+                Map<String, Object> slot = new LinkedHashMap<>();
+                slot.put("type", typ);
+                slot.put("label", typ);
+                slot.put("placeName", pn);
+                slot.put("address", c.path("a").asText(""));
+                slot.put("reason", "");
+                putSlotCoordinates(slot, c);
+                putSlotSourceInfo(slot, c);
+                used.add(pn.toLowerCase());
+                slots.add(slot);
+            }
+        }
+    }
+
+    private int countTotalSlots(List<Map<String, Object>> days) {
+        int n = 0;
+        if (days == null) {
+            return 0;
+        }
+        for (Map<String, Object> day : days) {
+            Object s = day.get("slots");
+            if (s instanceof List<?> lst) {
+                n += lst.size();
+            }
+        }
+        return n;
     }
 
     private boolean isEventDoc(RagSearchService.RagDocumentContext doc) {
@@ -453,20 +1186,49 @@ public class GroqChatService {
         return matcher.group(1).trim();
     }
 
-    private String createRagSearchQuery(AiChatRequest request) {
+    private String createRagSearchQuery(AiChatRequest request, List<TourCourse> savedCoursesForKeywords) {
         List<String> parts = new ArrayList<>();
 
         if (request.getHistory() != null) {
             List<AiChatRequest.ChatHistoryMessage> valid = request.getHistory().stream()
                     .filter(this::isValidHistoryMessage)
                     .toList();
-            int ragHistoryLimit = 8;
+            int ragHistoryLimit = Math.max(2, Math.min(12, promptMaxHistoryMessages));
+            int hChars = Math.max(200, Math.min(800, promptMaxHistoryChars));
             int skip = Math.max(0, valid.size() - ragHistoryLimit);
             valid.stream()
                     .skip(skip)
                     .map(AiChatRequest.ChatHistoryMessage::getContent)
-                    .map(content -> truncate(content, 520))
+                    .map(content -> truncate(content, hChars))
                     .forEach(parts::add);
+        }
+
+        if (savedCoursesForKeywords != null) {
+            int linesAdded = 0;
+            for (TourCourse c : savedCoursesForKeywords) {
+                if (c == null || linesAdded >= 4) {
+                    break;
+                }
+                String title = truncate(nullToEmpty(c.getTitle()).trim(), 100);
+                if (!title.isBlank()) {
+                    parts.add(title);
+                    linesAdded++;
+                }
+                if (linesAdded >= 4) {
+                    break;
+                }
+                String tags = sanitizePromptLine(nullToEmpty(c.getHashtags()));
+                if (!tags.isBlank()) {
+                    parts.add(truncate(tags, 100));
+                    linesAdded++;
+                }
+            }
+        }
+
+        // RAG 일수·쿼터는 search() 문자열에서만 날짜를 파싱하므로, tripStart/tripEnd·히스토리만 있을 때도 구간이 들어가게 한다.
+        TripDateRange tripForRag = resolveTripDateRange(request);
+        if (tripForRag != null) {
+            parts.add("%s ~ %s".formatted(tripForRag.start(), tripForRag.end()));
         }
 
         parts.add(request.getMessage());
@@ -514,15 +1276,24 @@ public class GroqChatService {
 
             Map<String, Object> structured = new LinkedHashMap<>(response.getStructured());
             Object daysObj = structured.get("days");
-            if (!(daysObj instanceof List<?> dayList) || dayList.isEmpty()) return response;
+            if (!(daysObj instanceof List<?> dayListRaw)) {
+                return response;
+            }
+            List<Map<String, Object>> days = normalizeDaysToMutableList(dayListRaw);
+            structured.put("days", days);
+            if (days.isEmpty() && expectedInclusiveCalendarDays(request) == null) {
+                return response;
+            }
+            ensureTripCalendarShape(days, request, candidates);
+            injectMandatoryCandidatesIntoDays(days, candidates);
 
-            int candidateIndex = 0;
-            Set<String> usedPlaceNames = new HashSet<>();
-            for (Object dayRaw : dayList) {
-                if (!(dayRaw instanceof Map<?, ?> dayMap)) continue;
-                Map<String, Object> day = (Map<String, Object>) dayMap;
+            int candidateIndex = countTotalSlots(days);
+            Set<String> usedPlaceNames = new HashSet<>(collectAllPlaceNames(days));
+            for (Map<String, Object> day : days) {
                 Object slotsObj = day.get("slots");
-                if (!(slotsObj instanceof List<?> slotList)) continue;
+                if (!(slotsObj instanceof List<?> slotList)) {
+                    continue;
+                }
 
                 for (int i = 0; i < slotList.size(); i++) {
                     Object slotRaw = slotList.get(i);
@@ -540,7 +1311,11 @@ public class GroqChatService {
                     if (type.isBlank()) { type = slotTypeByIndex(i); slot.put("type", type); }
                     if (label.isBlank()) { slot.put("label", type); }
                     boolean mealSlot = isMealSlot(type, label);
+                    String sourceId = str(slot.get("sourceId"));
                     JsonNode matchedCandidate = findCandidateByPlaceName(candidates, placeName);
+                    if (matchedCandidate == null) {
+                        matchedCandidate = findCandidateBySourceId(candidates, sourceId);
+                    }
                     boolean duplicateName = !placeName.isBlank() && usedPlaceNames.contains(placeName.toLowerCase());
                     boolean closedForSlot = matchedCandidate != null && !isLikelyOpenForSlot(matchedCandidate, type, label);
                     boolean weakMealMatch = mealSlot
@@ -584,12 +1359,12 @@ public class GroqChatService {
                     }
                 }
             }
-            applyFlightTimeWindow(dayList, request);
-            optimizeDailyTravel(dayList, candidates);
-            optimizeCrossDayTravel(dayList, candidates);
-            optimizeDailyTravel(dayList, candidates);
-            localizeSlotsBySource(dayList, request.getLanguage());
-            clearAllSlotReasons(dayList);
+            applyFlightTimeWindow(days, request);
+            optimizeDailyTravel(days, candidates);
+            optimizeCrossDayTravel(days, candidates);
+            optimizeDailyTravel(days, candidates);
+            localizeSlotsBySource(days, request.getLanguage());
+            clearAllSlotReasons(days);
             return new AiChatResponse(response.getAnswer(), structured, response.getModel());
         } catch (Exception e) {
             log.warn("[AI] ensureStructuredQuality 실패, 원본 반환: {}", e.getMessage());
@@ -747,11 +1522,17 @@ public class GroqChatService {
     }
 
     @SuppressWarnings("unchecked")
-    private boolean needsRetry(AiChatResponse response) {
+    private boolean needsRetry(AiChatResponse response, AiChatRequest request) {
         if (response == null || response.getStructured() == null) return true;
 
         Object daysObj = response.getStructured().get("days");
         if (!(daysObj instanceof List<?> dayList) || dayList.isEmpty()) return true;
+
+        Integer expectedDays = request != null ? expectedInclusiveCalendarDays(request) : null;
+        if (expectedDays != null && dayList.size() < expectedDays) {
+            log.info("[AI] needsRetry: day count {} < expected calendar days {}", dayList.size(), expectedDays);
+            return true;
+        }
 
         int totalSlots = 0;
         int goodSlots = 0;
@@ -882,10 +1663,12 @@ public class GroqChatService {
                 Rules:
                 - "answer" is required every time: friendly summary of the plan for the user, same language as Requested language (ko/en/ja/zh).
                 - Each day's "label" (e.g. day title) should also be written in the same human language as Requested language (e.g. English: "Day 1", Japanese: "1日目", Korean: "1일차").
+                - Each day's "date" field MUST be strict YYYY-MM-DD only (ASCII digits and hyphens). Never put natural-language dates in "date" (e.g. not "May 12, 2026", not Korean "2026년 5월 12일", not "2026年5月12日"); the app formats that value for the user's UI locale.
                 - Slots per day are FLEXIBLE (not always 6): use the user's flight arrival time and departure time (from the trip summary / chat, e.g. lines with 도착/arrive and 출발/depart) to decide which parts of the day are realistic.
                   - First day: if arrival is late morning or afternoon, omit 아침 and possibly 오전 코스; if arrival is evening, keep only 저녁 and/or 밤 코스 as appropriate.
                   - Last day: if departure is morning or before lunch, omit 밤 코스 and 저녁 (and 오후 코스 if needed); if departure is early afternoon, trim evening slots accordingly.
                   - Middle days: usually fill as fully as reasonable (often up to the full sequence below), still respecting travel time between slots.
+                - Calendar coverage: If the trip summary or chat includes explicit trip dates as YYYY-MM-DD ~ YYYY-MM-DD (or TRIP_CALENDAR_DAYS appears), the "days" array MUST contain exactly one object per inclusive calendar day in that range (count both endpoints). Never merge two calendar days into one and never omit a middle day—if time is tight, use fewer slot types per day instead of dropping a day.
                 - When you include multiple slots in one day, list them ONLY in this canonical order (subset allowed, never reorder): 아침 → 오전 코스 → 점심 → 오후 코스 → 저녁 → 밤 코스.
                 - Prefer to pack the day densely when times allow: meal slots (아침, 점심, 저녁) with restaurant-like CANDIDATES; sightseeing slots (오전 코스, 오후 코스, 밤 코스) with attraction/culture-like CANDIDATES.
                 - slot.type/label: one of 아침|오전 코스|점심|오후 코스|저녁|밤 코스 (keep these Korean tokens exactly for slot.type and slot.label so downstream parsers match)
@@ -893,7 +1676,7 @@ public class GroqChatService {
                 - slot.placeName: use CANDIDATES[].n first, never empty
                 - Do not repeat the same placeName across all days/slots (case-insensitive). One place can appear only once.
                 - slot.address: use CANDIDATES[].a, empty if unknown
-                - slot.thumbnail: use CANDIDATES[].img if available, otherwise ""
+                - slot.thumbnail: use CANDIDATES[].img when the compact list includes it; otherwise "" (the app may fill thumbnails after matching by placeName).
                 - slot.reason: always use empty string "" (no narrative; place detail is shown elsewhere in the app).
                 - Prefer restaurant-like candidates for 아침, 점심, and 저녁 slots, but use non-restaurant fallback when restaurant candidates are insufficient.
                 - Prefer attraction/culture-like candidates for 오전 코스, 오후 코스, and 밤 코스 slots, but keep fallback flexible.
@@ -901,7 +1684,7 @@ public class GroqChatService {
                 - Keep consecutive moves practical; avoid transitions that are likely over 45 minutes when alternatives exist.
                 - Across days: the LAST slot of day N and the FIRST slot of day N+1 should also be within ~45 minutes travel when both have locations, unless the user clearly wants a long-distance jump (e.g. new city day).
                 - Never put locker/luggage-storage POIs in slots. Lockers are not loaded into CANDIDATES for this flow; the app uses a separate nearest-locker API (first-day + last-day anchors only).
-                - CANDIDATES key: n=name, a=address, img=thumbnailUrl, c=category, h=operatingHours, st=sourceType, sid=sourceId, lat=latitude, lng=longitude, ls=localScore (0~1, higher = more local vibe)
+                - CANDIDATES key: n=name, a=address, c=category, h=operatingHours, st=sourceType, sid=sourceId, lat=latitude, lng=longitude, ls=localScore (0~1). Image URLs may be omitted in the compact CANDIDATES list to save tokens—leave slot.thumbnail empty when unsure.
 
                 Itinerary revision (when chat history exists or the user asks to change the plan):
                 - The LAST user message is the primary instruction for THIS response. Follow it over older turns if they conflict.
@@ -933,6 +1716,7 @@ public class GroqChatService {
                 - slot.address should be filled when context contains it, otherwise use ""
                 - Never output placeholder words or gibberish
                 - Keep strict valid JSON only
+                - If TRIP_CALENDAR_DAYS or explicit YYYY-MM-DD ~ YYYY-MM-DD dates exist in context, "days" length must equal inclusive calendar days; include every calendar day with non-empty slots (never skip a middle day).
                 - If the user message is a revision: output the FULL updated days[] again; do not return partial JSON;
                   preserve unchanged slots verbatim where possible.
                 """;
@@ -1196,6 +1980,20 @@ public class GroqChatService {
         return fallback;
     }
 
+    private JsonNode findCandidateBySourceId(ArrayNode candidates, String sourceId) {
+        if (candidates == null || candidates.isEmpty() || sourceId == null || sourceId.isBlank()) {
+            return null;
+        }
+        String want = sourceId.trim();
+        for (JsonNode candidate : candidates) {
+            String sid = candidate.path("sid").asText("").trim();
+            if (!sid.isBlank() && sid.equals(want)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
     @SuppressWarnings("unchecked")
     private void putSlotCoordinates(Map<String, Object> slot, JsonNode candidate) {
         if (slot == null || candidate == null) return;
@@ -1451,6 +2249,112 @@ public class GroqChatService {
         Object raw = list.get(list.size() - 1);
         if (raw instanceof Map<?, ?> map) return (Map<String, Object>) map;
         return null;
+    }
+
+    /**
+     * 저장 공식 코스에서 넣은 CANDIDATES 행(mi=true)이 슬롯에 빠져 있으면 가장 슬롯이 적은 일차에 추가한다.
+     */
+    @SuppressWarnings("unchecked")
+    private void injectMandatoryCandidatesIntoDays(List<Map<String, Object>> days, ArrayNode candidates) {
+        if (days == null || days.isEmpty() || candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        List<JsonNode> mandatory = new ArrayList<>();
+        for (int i = 0; i < candidates.size(); i++) {
+            JsonNode n = candidates.get(i);
+            if (n != null && n.path("mi").asBoolean(false)) {
+                mandatory.add(n);
+            }
+        }
+        if (mandatory.isEmpty()) {
+            return;
+        }
+
+        Set<String> covered = new HashSet<>();
+        for (Map<String, Object> day : days) {
+            for (Map<String, Object> slot : mutableSlots(day)) {
+                String sid = str(slot.get("sourceId"));
+                String st = str(slot.get("sourceType"));
+                if (!sid.isBlank()) {
+                    covered.add(normalizeMandatorySourceKey(st, sid));
+                }
+            }
+        }
+
+        for (JsonNode m : mandatory) {
+            String sid = m.path("sid").asText("").trim();
+            String stRaw = m.path("st").asText("");
+            if (sid.isBlank()) {
+                continue;
+            }
+            String key = normalizeMandatorySourceKey(stRaw, sid);
+            if (covered.contains(key)) {
+                continue;
+            }
+            Map<String, Object> day = pickLightestDayMap(days);
+            if (day == null) {
+                continue;
+            }
+            List<Map<String, Object>> slots = ensureMutableSlotsList(day);
+            Map<String, Object> slot = new LinkedHashMap<>();
+            String stLower = stRaw.toLowerCase(Locale.ROOT);
+            boolean isEvent = stLower.contains("event");
+            String typeLabel = isEvent ? "행사" : "관광";
+            slot.put("type", typeLabel);
+            slot.put("label", typeLabel);
+            slot.put("placeName", m.path("n").asText("").trim());
+            slot.put("address", m.path("a").asText(""));
+            slot.put("reason", "");
+            putSlotSourceInfo(slot, m);
+            putSlotCoordinates(slot, m);
+            slots.add(slot);
+            covered.add(key);
+        }
+    }
+
+    private static String normalizeMandatorySourceKey(String sourceType, String sourceId) {
+        String st = sourceType == null ? "" : sourceType.trim().toLowerCase(Locale.ROOT);
+        if (st.contains("event")) {
+            st = "event";
+        } else if (st.contains("attraction")) {
+            st = "attraction";
+        }
+        String sid = sourceId == null ? "" : sourceId.trim();
+        return st + ":" + sid;
+    }
+
+    private Map<String, Object> pickLightestDayMap(List<Map<String, Object>> days) {
+        if (days == null || days.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> best = null;
+        int min = Integer.MAX_VALUE;
+        for (Map<String, Object> d : days) {
+            int n = mutableSlots(d).size();
+            if (n < min) {
+                min = n;
+                best = d;
+            }
+        }
+        return best;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> ensureMutableSlotsList(Map<String, Object> day) {
+        Object slotsObj = day.get("slots");
+        if (slotsObj instanceof ArrayList<?> al) {
+            return (ArrayList<Map<String, Object>>) (ArrayList<?>) al;
+        }
+        List<Map<String, Object>> nl = new ArrayList<>();
+        if (slotsObj instanceof List<?> raw) {
+            for (Object slotRaw : raw) {
+                if (slotRaw instanceof Map<?, ?> slotMap) {
+                    nl.add((Map<String, Object>) slotMap);
+                }
+            }
+        }
+        day.put("slots", nl);
+        return nl;
     }
 
     @SuppressWarnings("unchecked")

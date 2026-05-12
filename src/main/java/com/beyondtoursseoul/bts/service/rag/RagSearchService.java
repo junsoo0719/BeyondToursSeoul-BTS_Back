@@ -8,11 +8,13 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -21,9 +23,9 @@ import java.util.regex.Pattern;
 public class RagSearchService {
 
     private static final int MAX_KEYWORD_COUNT = 16;
-    /** 식당·관광 후보: 일수당 각 5건 (프롬프트·토큰 부담 완화) */
-    private static final int PER_DAY_RESTAURANT = 5;
-    private static final int PER_DAY_ATTRACTION = 5;
+    /** 식당·관광 후보: 일수당 각 3건 (하루 6건, Groq 컨텍스트 절약) */
+    private static final int PER_DAY_RESTAURANT = 3;
+    private static final int PER_DAY_ATTRACTION = 3;
     /** 입력 기간 파싱 상한 (비정상 메시지·과도한 SQL limit 방지) */
     private static final int MAX_TRIP_DAYS = 21;
     /** scored CTE에서 가져오는 최대 행 수 (다양화 전 풀) */
@@ -36,6 +38,9 @@ public class RagSearchService {
     private static final Pattern DATE_RANGE_PATTERN = Pattern.compile(
             "(\\d{4}-\\d{2}-\\d{2})\\s*(?:~|〜|–|—|-)\\s*(\\d{4}-\\d{2}-\\d{2})"
     );
+    /** 키워드 추출이 비었을 때: 매칭 행이 나오도록 넓은 토큰(빈 RAG 방지) */
+    private static final List<String> FALLBACK_KEYWORDS = List.of("서울", "음식점", "관광지");
+
     private static final Set<String> STOPWORDS = Set.of(
             "서울", "여행", "일정", "계획", "코스", "생성", "추천", "장소", "좋은", "근처",
             "요청", "기간", "비행", "도착", "출발", "동행", "이동", "스타일", "테마", "추가",
@@ -59,13 +64,16 @@ public class RagSearchService {
     public List<RagDocumentContext> search(String message, String language, int localRatio) {
         List<String> keywords = extractKeywords(message);
         if (keywords.isEmpty()) {
-            log.info("[RAG] 검색 키워드 없음. message={}", summarize(message, 80));
-            return List.of();
+            log.info("[RAG] 검색 키워드 없음 → 폴백 키워드 사용. message={}", summarize(message, 80));
+            keywords = new ArrayList<>(FALLBACK_KEYWORDS);
         }
 
         int tripDays = estimateTripDays(message);
         int resultLimit = resultLimitFor(tripDays);
-        int candidateLimit = Math.min(MAX_CANDIDATE_COUNT, Math.max(80, (int) Math.ceil(resultLimit * 2.5)));
+        // Groq에는 resultLimit만 넘기지만, 여기서는 정렬·diversify에 쓸 충분한 scored 행을 가져와야 함(짧은 일정에서도 품질 유지).
+        int candidateLimit = Math.min(
+                MAX_CANDIDATE_COUNT,
+                Math.max(180, (int) Math.ceil(resultLimit * 10.0)));
         String transportPreference = resolveTransportPreference(message);
         Set<String> companionPreferences = resolveCompanionPreferences(message);
         int groupSize = estimateGroupSize(message);
@@ -201,7 +209,7 @@ public class RagSearchService {
                       on pe.source_type = rd.source_type
                      and pe.source_id = rd.source_id
                     where rd.lang_code in (:langCodes)
-                      and lower(coalesce(rd.source_type, '')) not like '%locker%'
+                      and lower(coalesce(rd.source_type, '')) not like '%%locker%%'
                       and (%s)
                 ),
                 max_match as (
@@ -274,9 +282,242 @@ public class RagSearchService {
             }
         }
 
+        int minPool = Math.min(MAX_CANDIDATE_COUNT, Math.max(resultLimit * 8, 120));
+        if (candidates.size() < minPool) {
+            mergeUniqueById(candidates, fetchBroadDocuments(langCodes, targetLocal, minPool));
+        }
+
         List<RagDocumentContext> results = diversifyResults(candidates, resultLimit, tripDays);
+        topUpRestaurantAttractionQuota(results, candidates, tripDays, resultLimit);
+        int t = clampTripDays(tripDays);
+        if (countCategory(results, "restaurant") < PER_DAY_RESTAURANT * t
+                || countCategory(results, "attraction") < PER_DAY_ATTRACTION * t) {
+            mergeUniqueById(candidates, fetchBroadDocuments(langCodes, targetLocal, MAX_CANDIDATE_COUNT));
+            topUpRestaurantAttractionQuota(results, candidates, tripDays, resultLimit);
+        }
+        fillRestaurantAttractionQuotaWithUncategorizedFallback(results, candidates, tripDays, resultLimit);
         logSearchResults(message, keywords, langCodes, tripDays, resultLimit, localRatio, results);
         return results;
+    }
+
+    private void mergeUniqueById(List<RagDocumentContext> into, List<RagDocumentContext> more) {
+        if (more == null || more.isEmpty()) {
+            return;
+        }
+        Set<Long> seen = new HashSet<>();
+        for (RagDocumentContext c : into) {
+            if (c != null && c.id() != null) {
+                seen.add(c.id());
+            }
+        }
+        for (RagDocumentContext c : more) {
+            if (c == null || c.id() == null || isLockerRagRow(c)) {
+                continue;
+            }
+            if (seen.add(c.id())) {
+                into.add(c);
+            }
+        }
+    }
+
+    /**
+     * 키워드 매칭 없이 언어·로컬 점수 기준으로 rag_documents를 가져와 후보 풀을 채운다.
+     */
+    private List<RagDocumentContext> fetchBroadDocuments(List<String> langCodes, double targetLocal, int limit) {
+        int cap = Math.max(1, Math.min(limit, MAX_CANDIDATE_COUNT));
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("langCodes", langCodes)
+                .addValue("targetLocal", targetLocal)
+                .addValue("limit", cap);
+
+        String sql = """
+                with latest_dong_score as (
+                    select dls.dong_code, max(dls.score)::double precision as local_score
+                    from public.dong_local_score dls
+                    where dls.date = (select max(date) from public.dong_local_score)
+                    group by dls.dong_code
+                )
+                select
+                  rd.id,
+                  rd.source_type,
+                  rd.source_id,
+                  rd.title,
+                  rd.content,
+                  rd.lang_code,
+                  rd.dong_code,
+                  rd.latitude,
+                  rd.longitude,
+                  rd.metadata::text as metadata,
+                  0 as match_score,
+                  coalesce(lds.local_score, 0.5)::double precision as local_score,
+                  (
+                    0.50 * (1.0 - abs(coalesce(lds.local_score, 0.5)::double precision - :targetLocal))
+                    + 0.25
+                  )::double precision as alignment_score
+                from public.rag_documents rd
+                left join latest_dong_score lds on lds.dong_code = rd.dong_code
+                where rd.lang_code in (:langCodes)
+                  and lower(coalesce(rd.source_type, '')) not like '%locker%'
+                order by alignment_score desc, rd.id asc
+                limit :limit
+                """;
+
+        return jdbcTemplate.query(sql, params, (rs, rowNum) -> {
+            String sourceType = rs.getString("source_type");
+            String title = rs.getString("title");
+            String content = rs.getString("content");
+            String metadata = rs.getString("metadata");
+            return new RagDocumentContext(
+                    rs.getLong("id"),
+                    sourceType,
+                    rs.getString("source_id"),
+                    title,
+                    content,
+                    rs.getString("lang_code"),
+                    rs.getString("dong_code"),
+                    rs.getObject("latitude", Double.class),
+                    rs.getObject("longitude", Double.class),
+                    metadata,
+                    rs.getInt("match_score"),
+                    classifyCategory(sourceType, title, content, metadata),
+                    rs.getObject("local_score", Double.class),
+                    rs.getObject("alignment_score", Double.class)
+            );
+        });
+    }
+
+    private int countCategory(List<RagDocumentContext> list, String category) {
+        int n = 0;
+        if (list == null || category == null) {
+            return 0;
+        }
+        for (RagDocumentContext c : list) {
+            if (c != null && category.equals(c.category())) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * diversify 후에도 식당·관광 3:3/일이 안 채워지면, 같은 후보 풀에서 부족분만 채운다(빈 배열·과소 방지).
+     */
+    private void topUpRestaurantAttractionQuota(
+            List<RagDocumentContext> selected,
+            List<RagDocumentContext> candidates,
+            int tripDays,
+            int resultLimit
+    ) {
+        if (selected == null || candidates == null) {
+            return;
+        }
+        int t = clampTripDays(tripDays);
+        int needR = PER_DAY_RESTAURANT * t;
+        int needA = PER_DAY_ATTRACTION * t;
+        Set<Long> ids = new LinkedHashSet<>();
+        for (RagDocumentContext s : selected) {
+            if (s != null && s.id() != null) {
+                ids.add(s.id());
+            }
+        }
+
+        for (RagDocumentContext c : candidates) {
+            if (c == null || c.id() == null || ids.contains(c.id()) || isLockerRagRow(c)) {
+                continue;
+            }
+            if (countCategory(selected, "restaurant") >= needR) {
+                break;
+            }
+            if ("restaurant".equals(c.category()) && ids.add(c.id())) {
+                selected.add(c);
+            }
+        }
+        for (RagDocumentContext c : candidates) {
+            if (c == null || c.id() == null || ids.contains(c.id()) || isLockerRagRow(c)) {
+                continue;
+            }
+            if (countCategory(selected, "attraction") >= needA) {
+                break;
+            }
+            if ("attraction".equals(c.category()) && ids.add(c.id())) {
+                selected.add(c);
+            }
+        }
+        for (RagDocumentContext c : candidates) {
+            if (selected.size() >= resultLimit) {
+                break;
+            }
+            if (c == null || c.id() == null || ids.contains(c.id()) || isLockerRagRow(c)) {
+                continue;
+            }
+            String cat = c.category();
+            if (!"restaurant".equals(cat) && !"attraction".equals(cat)) {
+                continue;
+            }
+            if ("restaurant".equals(cat) && countCategory(selected, "restaurant") >= needR) {
+                continue;
+            }
+            if ("attraction".equals(cat) && countCategory(selected, "attraction") >= needA) {
+                continue;
+            }
+            if (ids.add(c.id())) {
+                selected.add(c);
+            }
+        }
+    }
+
+    /**
+     * 키워드 분류상 식당·관광이 부족할 때, 라커만 제외한 나머지 후보를 무작위 순서로 가져와
+     * 슬롯만 restaurant/attraction으로 맞춘다(본문은 원본 그대로 — 일정 밀도 우선).
+     */
+    private void fillRestaurantAttractionQuotaWithUncategorizedFallback(
+            List<RagDocumentContext> selected,
+            List<RagDocumentContext> candidates,
+            int tripDays,
+            int resultLimit
+    ) {
+        if (selected == null || candidates == null) {
+            return;
+        }
+        int t = clampTripDays(tripDays);
+        int needR = PER_DAY_RESTAURANT * t;
+        int needA = PER_DAY_ATTRACTION * t;
+        Set<Long> ids = new LinkedHashSet<>();
+        for (RagDocumentContext s : selected) {
+            if (s != null && s.id() != null) {
+                ids.add(s.id());
+            }
+        }
+        List<RagDocumentContext> pool = new ArrayList<>();
+        for (RagDocumentContext c : candidates) {
+            if (c == null || c.id() == null || ids.contains(c.id()) || isLockerRagRow(c)) {
+                continue;
+            }
+            pool.add(c);
+        }
+        Collections.shuffle(pool, ThreadLocalRandom.current());
+        int i = 0;
+        while (i < pool.size() && selected.size() < resultLimit) {
+            int cr = countCategory(selected, "restaurant");
+            int ca = countCategory(selected, "attraction");
+            if (cr >= needR && ca >= needA) {
+                break;
+            }
+            RagDocumentContext raw = pool.get(i++);
+            if (ids.contains(raw.id())) {
+                continue;
+            }
+            String assign;
+            if (cr < needR && ca < needA) {
+                assign = ThreadLocalRandom.current().nextBoolean() ? "restaurant" : "attraction";
+            } else if (cr < needR) {
+                assign = "restaurant";
+            } else {
+                assign = "attraction";
+            }
+            selected.add(raw.withCategory(assign));
+            ids.add(raw.id());
+        }
     }
 
     private List<RagDocumentContext> diversifyResults(
@@ -289,7 +530,7 @@ public class RagSearchService {
 
         addCategoryResults(candidates, selected, selectedIds, "restaurant", restaurantLimitFor(tripDays), resultLimit);
         addCategoryResults(candidates, selected, selectedIds, "attraction", attractionLimitFor(tripDays), resultLimit);
-        int ancillaryLimit = ancillaryCategoryLimit(tripDays);
+        int ancillaryLimit = ancillaryCategoryLimit();
         addCategoryResults(candidates, selected, selectedIds, "night", ancillaryLimit, resultLimit);
         addCategoryResults(candidates, selected, selectedIds, "event", ancillaryLimit, resultLimit);
         addCategoryResults(candidates, selected, selectedIds, "shopping_kpop", ancillaryLimit, resultLimit);
@@ -298,7 +539,10 @@ public class RagSearchService {
             if (selected.size() >= resultLimit) {
                 break;
             }
-
+            String cat = candidate.category();
+            if (!"restaurant".equals(cat) && !"attraction".equals(cat)) {
+                continue;
+            }
             if (selectedIds.add(candidate.id())) {
                 selected.add(candidate);
             }
@@ -398,21 +642,17 @@ public class RagSearchService {
 
     /**
      * diversify 단계에서 선택할 최대 문서 수.
-     * 식당·관광(일수×10) + 야경·행사·쇼핑(일수 기반, 상한). 락커는 RAG에 넣지 않음(앱에서 nearest API).
+     * 식당·관광만: 일수당 (식3 + 관3) = 6×일수. 야경·행사·쇼핑은 Groq 컨텍스트 절약을 위해 넣지 않음.
      */
     private int resultLimitFor(int tripDays) {
         int t = clampTripDays(tripDays);
-        int restaurants = PER_DAY_RESTAURANT * t;
-        int attractions = PER_DAY_ATTRACTION * t;
-        int anc = ancillaryCategoryLimit(tripDays);
-        int budget = restaurants + attractions + 3 * anc;
-        return Math.min(MAX_RESULT_CAP, Math.max(12, budget));
+        int perDay = PER_DAY_RESTAURANT + PER_DAY_ATTRACTION;
+        return Math.min(MAX_RESULT_CAP, Math.max(perDay, perDay * t));
     }
 
-    /** 야경·행사·K-pop/쇼핑: 짧은 일정은 최소 2, 길어지면 일수까지 늘리되 과도한 비중은 10건으로 캡 */
-    private int ancillaryCategoryLimit(int tripDays) {
-        int t = clampTripDays(tripDays);
-        return Math.max(2, Math.min(t, 10));
+    /** 야경·행사·K-pop/쇼핑: AI 프롬프트용 RAG에서는 사용하지 않음(0). */
+    private int ancillaryCategoryLimit() {
+        return 0;
     }
 
     private int restaurantLimitFor(int tripDays) {
@@ -610,5 +850,23 @@ public class RagSearchService {
             Double localScore,
             Double alignmentScore
     ) {
+        public RagDocumentContext withCategory(String newCategory) {
+            return new RagDocumentContext(
+                    id,
+                    sourceType,
+                    sourceId,
+                    title,
+                    content,
+                    langCode,
+                    dongCode,
+                    latitude,
+                    longitude,
+                    metadata,
+                    matchScore,
+                    newCategory,
+                    localScore,
+                    alignmentScore
+            );
+        }
     }
 }
