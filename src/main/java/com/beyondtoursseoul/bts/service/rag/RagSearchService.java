@@ -8,11 +8,13 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -293,6 +295,7 @@ public class RagSearchService {
             mergeUniqueById(candidates, fetchBroadDocuments(langCodes, targetLocal, MAX_CANDIDATE_COUNT));
             topUpRestaurantAttractionQuota(results, candidates, tripDays, resultLimit);
         }
+        fillRestaurantAttractionQuotaWithUncategorizedFallback(results, candidates, tripDays, resultLimit);
         logSearchResults(message, keywords, langCodes, tripDays, resultLimit, localRatio, results);
         return results;
     }
@@ -460,6 +463,60 @@ public class RagSearchService {
             if (ids.add(c.id())) {
                 selected.add(c);
             }
+        }
+    }
+
+    /**
+     * 키워드 분류상 식당·관광이 부족할 때, 라커만 제외한 나머지 후보를 무작위 순서로 가져와
+     * 슬롯만 restaurant/attraction으로 맞춘다(본문은 원본 그대로 — 일정 밀도 우선).
+     */
+    private void fillRestaurantAttractionQuotaWithUncategorizedFallback(
+            List<RagDocumentContext> selected,
+            List<RagDocumentContext> candidates,
+            int tripDays,
+            int resultLimit
+    ) {
+        if (selected == null || candidates == null) {
+            return;
+        }
+        int t = clampTripDays(tripDays);
+        int needR = PER_DAY_RESTAURANT * t;
+        int needA = PER_DAY_ATTRACTION * t;
+        Set<Long> ids = new LinkedHashSet<>();
+        for (RagDocumentContext s : selected) {
+            if (s != null && s.id() != null) {
+                ids.add(s.id());
+            }
+        }
+        List<RagDocumentContext> pool = new ArrayList<>();
+        for (RagDocumentContext c : candidates) {
+            if (c == null || c.id() == null || ids.contains(c.id()) || isLockerRagRow(c)) {
+                continue;
+            }
+            pool.add(c);
+        }
+        Collections.shuffle(pool, ThreadLocalRandom.current());
+        int i = 0;
+        while (i < pool.size() && selected.size() < resultLimit) {
+            int cr = countCategory(selected, "restaurant");
+            int ca = countCategory(selected, "attraction");
+            if (cr >= needR && ca >= needA) {
+                break;
+            }
+            RagDocumentContext raw = pool.get(i++);
+            if (ids.contains(raw.id())) {
+                continue;
+            }
+            String assign;
+            if (cr < needR && ca < needA) {
+                assign = ThreadLocalRandom.current().nextBoolean() ? "restaurant" : "attraction";
+            } else if (cr < needR) {
+                assign = "restaurant";
+            } else {
+                assign = "attraction";
+            }
+            selected.add(raw.withCategory(assign));
+            ids.add(raw.id());
         }
     }
 
@@ -793,5 +850,23 @@ public class RagSearchService {
             Double localScore,
             Double alignmentScore
     ) {
+        public RagDocumentContext withCategory(String newCategory) {
+            return new RagDocumentContext(
+                    id,
+                    sourceType,
+                    sourceId,
+                    title,
+                    content,
+                    langCode,
+                    dongCode,
+                    latitude,
+                    longitude,
+                    metadata,
+                    matchScore,
+                    newCategory,
+                    localScore,
+                    alignmentScore
+            );
+        }
     }
 }

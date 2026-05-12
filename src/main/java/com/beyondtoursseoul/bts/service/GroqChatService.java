@@ -50,6 +50,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -67,6 +68,8 @@ public class GroqChatService {
     private static final int USER_SAVED_PROMPT_TOTAL_CHARS = 2000;
     /** 저장 공식 코스에서 CANDIDATES로 끌어올 관광지 스팟 상한(코스당 순서 유지·중복 제거) */
     private static final int SAVED_COURSE_SPOT_ATTRACTION_CAP = 20;
+    /** 저장 공식 코스에서 CANDIDATES로 끌어올 행사 스팟 상한 */
+    private static final int SAVED_COURSE_SPOT_EVENT_CAP = 20;
     private static final int MAX_TRAVEL_MINUTES = 45;
     private static final double CITY_SPEED_KMH = 18.0;
     private static final Pattern PLACE_NAME_PATTERN = Pattern.compile("장소명\\s*:\\s*([^\\n\\r]+)");
@@ -168,7 +171,8 @@ public class GroqChatService {
                 .build();
     }
 
-    @Transactional(readOnly = true)
+    /** readOnly 아님: 저장 코스 검증 시 profiles 행이 없으면 생성한다. */
+    @Transactional
     public AiChatResponse chat(AiChatRequest request, UUID authenticatedUserId) {
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("GROQ_API_KEY가 설정되어 있지 않습니다.");
@@ -187,8 +191,9 @@ public class GroqChatService {
         List<TourCourse> validatedSavedCourses =
                 resolveValidatedSavedCourses(authenticatedUserId, request.getSavedCourseIds());
         List<Attraction> courseSpotAttractions = resolveAttractionsFromSavedCourses(validatedSavedCourses);
-        List<Attraction> savedAttractionsForMerge =
-                mergeSavedAttractionListsForCandidates(courseSpotAttractions, validatedSavedAttractions);
+        List<TourApiEvent> courseSpotEvents = resolveEventsFromSavedCourses(validatedSavedCourses);
+        Map<Long, TourApiEventTranslation> courseEventTitles =
+                loadPreferredEventTranslations(courseSpotEvents);
         String userSavedBlock = buildUserSavedSelectionsSystemContent(validatedSavedAttractions, validatedSavedCourses);
 
         List<RagSearchService.RagDocumentContext> ragDocs = searchRagDocuments(request, validatedSavedCourses);
@@ -203,10 +208,16 @@ public class GroqChatService {
         int docCandidateLimit = candidateArrayLimit(ragDocs);
         int mergeCap = Math.min(
                 CANDIDATE_LIMIT_MAX,
-                docCandidateLimit + Math.min(20, savedAttractionsForMerge.size())
+                docCandidateLimit
+                        + courseSpotAttractions.size()
+                        + courseSpotEvents.size()
+                        + validatedSavedAttractions.size()
         );
         Map<String, Boolean> dedupe = dedupePlaceNamesFromCandidates(candidateArray);
-        mergeUserSavedAttractionsIntoCandidates(candidateArray, savedAttractionsForMerge, dedupe, mergeCap);
+        mergeUserSavedAttractionsIntoCandidates(candidateArray, courseSpotAttractions, dedupe, mergeCap, true);
+        mergeUserSavedAttractionsIntoCandidates(candidateArray, validatedSavedAttractions, dedupe, mergeCap, false);
+        mergeUserSavedEventsIntoCandidates(
+                candidateArray, courseSpotEvents, courseEventTitles, dedupe, mergeCap);
         trimCandidateArrayToMax(candidateArray, mergeCap);
 
         String rawContent = requestCompletion(request, model, false, ragContext, candidateArray, userSavedBlock);
@@ -257,10 +268,8 @@ public class GroqChatService {
         if (userId == null || requestedIds == null || requestedIds.isEmpty()) {
             return List.of();
         }
-        Profile user = profileRepository.findById(userId).orElse(null);
-        if (user == null) {
-            return List.of();
-        }
+        Profile user = profileRepository.findById(userId)
+                .orElseGet(() -> profileRepository.save(Profile.createForUser(userId)));
         List<Long> idOrder = capSavedRequestIds(requestedIds);
         if (idOrder.isEmpty()) {
             return List.of();
@@ -285,10 +294,8 @@ public class GroqChatService {
         if (userId == null || requestedIds == null || requestedIds.isEmpty()) {
             return List.of();
         }
-        Profile user = profileRepository.findById(userId).orElse(null);
-        if (user == null) {
-            return List.of();
-        }
+        Profile user = profileRepository.findById(userId)
+                .orElseGet(() -> profileRepository.save(Profile.createForUser(userId)));
         List<Long> idOrder = capSavedRequestIds(requestedIds);
         if (idOrder.isEmpty()) {
             return List.of();
@@ -345,27 +352,65 @@ public class GroqChatService {
         return ordered;
     }
 
-    /** 코스에서 온 스팟을 먼저, 그다음 사용자가 직접 고른 저장 관광지(중복 제거). */
-    private static List<Attraction> mergeSavedAttractionListsForCandidates(
-            List<Attraction> courseSpotAttractions,
-            List<Attraction> directSavedAttractions
-    ) {
-        Map<Long, Attraction> byId = new LinkedHashMap<>();
-        if (courseSpotAttractions != null) {
-            for (Attraction a : courseSpotAttractions) {
-                if (a != null && a.getId() != null) {
-                    byId.putIfAbsent(a.getId(), a);
-                }
+    /**
+     * 저장 공식 코스에 포함된 행사 스팟을 순서대로 모은다.
+     */
+    private List<TourApiEvent> resolveEventsFromSavedCourses(List<TourCourse> courses) {
+        if (courses == null || courses.isEmpty()) {
+            return List.of();
+        }
+        List<Long> courseIds = courses.stream()
+                .map(TourCourse::getId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (courseIds.isEmpty()) {
+            return List.of();
+        }
+        List<TourCourseItem> rows = tourCourseItemRepository.findByCourseIdInWithSpotsFetchedOrdered(courseIds);
+        List<TourApiEvent> ordered = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        for (TourCourseItem row : rows) {
+            if (ordered.size() >= SAVED_COURSE_SPOT_EVENT_CAP) {
+                break;
+            }
+            if (row.getItemType() != CourseItemType.EVENT) {
+                continue;
+            }
+            TourApiEvent ev = row.getEvent();
+            if (ev == null || ev.getContentId() == null || seen.contains(ev.getContentId())) {
+                continue;
+            }
+            seen.add(ev.getContentId());
+            ordered.add(ev);
+        }
+        return ordered;
+    }
+
+    /** 코스 행사 제목·주소용 번역(한국어 우선). */
+    private Map<Long, TourApiEventTranslation> loadPreferredEventTranslations(List<TourApiEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return Map.of();
+        }
+        List<TourLanguage> langs = List.of(
+                TourLanguage.KOR,
+                TourLanguage.ENG,
+                TourLanguage.JPN,
+                TourLanguage.CHS,
+                TourLanguage.CHT
+        );
+        Map<Long, TourApiEventTranslation> best = new LinkedHashMap<>();
+        for (TourApiEventTranslation tr : tourApiEventTranslationRepository.findByEventInAndLanguageIn(events, langs)) {
+            if (tr.getEvent() == null || tr.getLanguage() == null) {
+                continue;
+            }
+            Long id = tr.getEvent().getContentId();
+            TourApiEventTranslation existing = best.get(id);
+            if (existing == null || (existing.getLanguage() != TourLanguage.KOR && tr.getLanguage() == TourLanguage.KOR)) {
+                best.put(id, tr);
             }
         }
-        if (directSavedAttractions != null) {
-            for (Attraction a : directSavedAttractions) {
-                if (a != null && a.getId() != null) {
-                    byId.putIfAbsent(a.getId(), a);
-                }
-            }
-        }
-        return new ArrayList<>(byId.values());
+        return best;
     }
 
     private String buildUserSavedSelectionsSystemContent(List<Attraction> attractions, List<TourCourse> courses) {
@@ -375,9 +420,16 @@ public class GroqChatService {
         StringBuilder sb = new StringBuilder();
         sb.append("USER_SELECTED_SAVED_LIST:\n");
         sb.append("- Saved attractions: prefer similar areas/categories from CANDIDATES; at most 1-2 slot overlaps with listed names if natural.\n");
-        sb.append("- Saved official courses: title and hashtags are MOOD/STYLE hints only. ");
-        sb.append("Never use a hashtag string or course title as slot.placeName. ");
-        sb.append("slot.placeName must always match a name from CANDIDATES[].n (official course POIs are merged into CANDIDATES when possible).\n");
+        if (courses != null && !courses.isEmpty()) {
+            sb.append("MANDATORY_SAVED_OFFICIAL_COURSES: The user explicitly selected the saved official tour course(s) below. ");
+            sb.append("Every POI from those courses that appears in CANDIDATES (same st+sid: attraction or event) MUST appear ");
+            sb.append("at least once in structured.days[].slots across the trip. Do not omit them for style or pacing. ");
+            sb.append("Course title and hashtags are mood/style hints only—never paste them as slot.placeName; ");
+            sb.append("use CANDIDATES[].n for place names.\n");
+        } else {
+            sb.append("- Saved official courses (when listed): title/hashtags are mood hints only; ");
+            sb.append("slot.placeName must match CANDIDATES[].n.\n");
+        }
         if (attractions != null && !attractions.isEmpty()) {
             sb.append("Saved attractions (name | address | category):\n");
             int rows = 0;
@@ -396,7 +448,7 @@ public class GroqChatService {
             }
         }
         if (courses != null && !courses.isEmpty()) {
-            sb.append("Saved official tour course themes (title | hashtags):\n");
+            sb.append("Selected saved official courses — include all their CANDIDATES POIs (title | hashtags):\n");
             int rows = 0;
             for (TourCourse c : courses) {
                 if (rows >= USER_SAVED_PROMPT_MAX_COURSE_ROWS) {
@@ -446,7 +498,8 @@ public class GroqChatService {
             ArrayNode array,
             List<Attraction> savedAttractions,
             Map<String, Boolean> dedupe,
-            int maxTotal
+            int maxTotal,
+            boolean mandatoryFromSavedCourse
     ) {
         if (array == null || savedAttractions == null || savedAttractions.isEmpty()) {
             return;
@@ -463,7 +516,7 @@ public class GroqChatService {
             if (name.isBlank()) {
                 continue;
             }
-            String key = name.toLowerCase();
+            String key = name.toLowerCase(Locale.ROOT);
             if (dedupe.containsKey(key)) {
                 continue;
             }
@@ -475,12 +528,66 @@ public class GroqChatService {
             node.put("h", nullToEmpty(att.getOperatingHours()));
             node.put("st", "attraction");
             node.put("sid", String.valueOf(att.getId()));
+            if (mandatoryFromSavedCourse) {
+                node.put("mi", true);
+            }
             if (att.getThumbnail() != null && !att.getThumbnail().isBlank()) {
                 node.put("img", att.getThumbnail());
             }
             if (att.getGeom() != null) {
                 node.put("lat", att.getGeom().getY());
                 node.put("lng", att.getGeom().getX());
+            }
+            array.insert(0, node);
+        }
+    }
+
+    private void mergeUserSavedEventsIntoCandidates(
+            ArrayNode array,
+            List<TourApiEvent> events,
+            Map<Long, TourApiEventTranslation> titleByContentId,
+            Map<String, Boolean> dedupe,
+            int maxTotal
+    ) {
+        if (array == null || events == null || events.isEmpty()) {
+            return;
+        }
+        for (int i = events.size() - 1; i >= 0; i--) {
+            if (array.size() >= maxTotal) {
+                break;
+            }
+            TourApiEvent ev = events.get(i);
+            if (ev == null || ev.getContentId() == null) {
+                continue;
+            }
+            TourApiEventTranslation tr = titleByContentId != null ? titleByContentId.get(ev.getContentId()) : null;
+            String name = tr != null ? nullToEmpty(tr.getTitle()).trim() : "";
+            if (name.isBlank()) {
+                name = "Event " + ev.getContentId();
+            }
+            String key = name.toLowerCase(Locale.ROOT);
+            if (dedupe.containsKey(key)) {
+                continue;
+            }
+            dedupe.put(key, true);
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("n", name);
+            String addr = tr != null ? firstNonBlank(tr.getAddress(), tr.getEventPlace()) : "";
+            node.put("a", addr);
+            node.put("c", "event");
+            node.put("h", "");
+            node.put("st", "event");
+            node.put("sid", String.valueOf(ev.getContentId()));
+            node.put("mi", true);
+            String thumb = firstNonBlank(ev.getFirstImage2(), ev.getFirstImage());
+            if (!thumb.isBlank()) {
+                node.put("img", thumb);
+            }
+            if (ev.getMapY() != null) {
+                node.put("lat", ev.getMapY());
+            }
+            if (ev.getMapX() != null) {
+                node.put("lng", ev.getMapX());
             }
             array.insert(0, node);
         }
@@ -1178,6 +1285,7 @@ public class GroqChatService {
                 return response;
             }
             ensureTripCalendarShape(days, request, candidates);
+            injectMandatoryCandidatesIntoDays(days, candidates);
 
             int candidateIndex = countTotalSlots(days);
             Set<String> usedPlaceNames = new HashSet<>(collectAllPlaceNames(days));
@@ -2141,6 +2249,112 @@ public class GroqChatService {
         Object raw = list.get(list.size() - 1);
         if (raw instanceof Map<?, ?> map) return (Map<String, Object>) map;
         return null;
+    }
+
+    /**
+     * 저장 공식 코스에서 넣은 CANDIDATES 행(mi=true)이 슬롯에 빠져 있으면 가장 슬롯이 적은 일차에 추가한다.
+     */
+    @SuppressWarnings("unchecked")
+    private void injectMandatoryCandidatesIntoDays(List<Map<String, Object>> days, ArrayNode candidates) {
+        if (days == null || days.isEmpty() || candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        List<JsonNode> mandatory = new ArrayList<>();
+        for (int i = 0; i < candidates.size(); i++) {
+            JsonNode n = candidates.get(i);
+            if (n != null && n.path("mi").asBoolean(false)) {
+                mandatory.add(n);
+            }
+        }
+        if (mandatory.isEmpty()) {
+            return;
+        }
+
+        Set<String> covered = new HashSet<>();
+        for (Map<String, Object> day : days) {
+            for (Map<String, Object> slot : mutableSlots(day)) {
+                String sid = str(slot.get("sourceId"));
+                String st = str(slot.get("sourceType"));
+                if (!sid.isBlank()) {
+                    covered.add(normalizeMandatorySourceKey(st, sid));
+                }
+            }
+        }
+
+        for (JsonNode m : mandatory) {
+            String sid = m.path("sid").asText("").trim();
+            String stRaw = m.path("st").asText("");
+            if (sid.isBlank()) {
+                continue;
+            }
+            String key = normalizeMandatorySourceKey(stRaw, sid);
+            if (covered.contains(key)) {
+                continue;
+            }
+            Map<String, Object> day = pickLightestDayMap(days);
+            if (day == null) {
+                continue;
+            }
+            List<Map<String, Object>> slots = ensureMutableSlotsList(day);
+            Map<String, Object> slot = new LinkedHashMap<>();
+            String stLower = stRaw.toLowerCase(Locale.ROOT);
+            boolean isEvent = stLower.contains("event");
+            String typeLabel = isEvent ? "행사" : "관광";
+            slot.put("type", typeLabel);
+            slot.put("label", typeLabel);
+            slot.put("placeName", m.path("n").asText("").trim());
+            slot.put("address", m.path("a").asText(""));
+            slot.put("reason", "");
+            putSlotSourceInfo(slot, m);
+            putSlotCoordinates(slot, m);
+            slots.add(slot);
+            covered.add(key);
+        }
+    }
+
+    private static String normalizeMandatorySourceKey(String sourceType, String sourceId) {
+        String st = sourceType == null ? "" : sourceType.trim().toLowerCase(Locale.ROOT);
+        if (st.contains("event")) {
+            st = "event";
+        } else if (st.contains("attraction")) {
+            st = "attraction";
+        }
+        String sid = sourceId == null ? "" : sourceId.trim();
+        return st + ":" + sid;
+    }
+
+    private Map<String, Object> pickLightestDayMap(List<Map<String, Object>> days) {
+        if (days == null || days.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> best = null;
+        int min = Integer.MAX_VALUE;
+        for (Map<String, Object> d : days) {
+            int n = mutableSlots(d).size();
+            if (n < min) {
+                min = n;
+                best = d;
+            }
+        }
+        return best;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> ensureMutableSlotsList(Map<String, Object> day) {
+        Object slotsObj = day.get("slots");
+        if (slotsObj instanceof ArrayList<?> al) {
+            return (ArrayList<Map<String, Object>>) (ArrayList<?>) al;
+        }
+        List<Map<String, Object>> nl = new ArrayList<>();
+        if (slotsObj instanceof List<?> raw) {
+            for (Object slotRaw : raw) {
+                if (slotRaw instanceof Map<?, ?> slotMap) {
+                    nl.add((Map<String, Object>) slotMap);
+                }
+            }
+        }
+        day.put("slots", nl);
+        return nl;
     }
 
     @SuppressWarnings("unchecked")
