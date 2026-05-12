@@ -1,6 +1,7 @@
 package com.beyondtoursseoul.bts.dto.saved;
 
 import com.beyondtoursseoul.bts.domain.Attraction;
+import com.beyondtoursseoul.bts.domain.AttractionTranslation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Getter;
 import org.locationtech.jts.geom.Point;
@@ -20,10 +21,14 @@ public class SavedAttractionResponse {
     private final OffsetDateTime savedAt;
 
     public SavedAttractionResponse(Attraction attraction, OffsetDateTime savedAt) {
+        this(attraction, null, savedAt);
+    }
+
+    public SavedAttractionResponse(Attraction attraction, AttractionTranslation translation, OffsetDateTime savedAt) {
         this.id = attraction.getId();
-        this.name = attraction.getName();
+        this.name = firstNonBlank(translation != null ? translation.getName() : null, attraction.getName());
         this.thumbnail = attraction.getThumbnail();
-        this.address = attraction.getAddress();
+        this.address = firstNonBlank(translation != null ? translation.getAddress() : null, attraction.getAddress());
         Point g = attraction.getGeom();
         if (g != null) {
             this.lng = g.getX();
@@ -33,5 +38,12 @@ public class SavedAttractionResponse {
             this.lat = null;
         }
         this.savedAt = savedAt;
+    }
+
+    private static String firstNonBlank(String preferred, String fallback) {
+        if (preferred != null && !preferred.isBlank()) {
+            return preferred.trim();
+        }
+        return fallback != null ? fallback : "";
     }
 }

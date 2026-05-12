@@ -29,12 +29,15 @@ public class MeSavedController {
 
     @Operation(summary = "저장한 관광지 목록", security = @SecurityRequirement(name = "jwtAuth"))
     @GetMapping("/attractions")
-    public ResponseEntity<List<SavedAttractionResponse>> savedAttractions(@AuthenticationPrincipal Jwt jwt) {
+    public ResponseEntity<List<SavedAttractionResponse>> savedAttractions(
+            @AuthenticationPrincipal Jwt jwt,
+            @Parameter(description = "언어 코드. ko(기본)/en/zh/ja — 관광지명·주소 번역에 사용")
+            @RequestHeader(value = "Accept-Language", required = false, defaultValue = "ko") String acceptLanguage) {
         if (jwt == null) {
             return ResponseEntity.status(401).build();
         }
         UUID userId = UUID.fromString(jwt.getSubject());
-        return ResponseEntity.ok(userSavedAttractionService.listSaved(userId));
+        return ResponseEntity.ok(userSavedAttractionService.listSaved(userId, acceptLanguage));
     }
 
     @Operation(summary = "관광지 저장/취소 (토글)", security = @SecurityRequirement(name = "jwtAuth"))
