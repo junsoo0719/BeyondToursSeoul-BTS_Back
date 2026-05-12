@@ -80,11 +80,16 @@ public class TourCourseService {
         Set<Long> courseIds = courses.stream().map(TourCourse::getId).collect(Collectors.toSet());
         Map<Long, CourseLocalRollup> rollups = loadCourseLocalRollups(courseIds);
         Map<Long, String> firstSpotImageByCourseId = loadFirstSpotThumbnailUrlByCourseId(courseIds);
+        Map<Long, Map<TourLanguage, TourCourseTranslation>> translationsByCourse =
+                loadTranslationsGroupedByCourse(courseIds);
+        Set<Long> savedCourseIds = user != null
+                ? userSavedCourseRepository.findSavedCourseIdsByUserId(user.getId())
+                : Set.of();
 
         return courses.stream()
                 .map(course -> {
-                    TourCourseTranslation translation = getTranslation(course, lang);
-                    boolean isSaved = user != null && userSavedCourseRepository.existsByUserAndCourse(user, course);
+                    TourCourseTranslation translation = resolveCourseTranslation(course, lang, translationsByCourse);
+                    boolean isSaved = user != null && savedCourseIds.contains(course.getId());
                     CourseLocalRollup r = rollups.get(course.getId());
 
                     return TourCourseSummaryResponse.builder()
@@ -359,6 +364,48 @@ public class TourCourseService {
                                 .title(course.getTitle())
                                 .hashtags(course.getHashtags())
                                 .build()));
+    }
+
+    /**
+     * 목록 N+1 방지: 코스별 번역을 한 번에 로드한 뒤, 요청 언어 → 국문 → 엔티티 기본값 순으로 고른다.
+     */
+    private Map<Long, Map<TourLanguage, TourCourseTranslation>> loadTranslationsGroupedByCourse(Set<Long> courseIds) {
+        Map<Long, Map<TourLanguage, TourCourseTranslation>> out = new HashMap<>();
+        if (courseIds == null || courseIds.isEmpty()) {
+            return out;
+        }
+        for (TourCourseTranslation t : tourCourseTranslationRepository.findByCourse_IdIn(courseIds)) {
+            if (t.getCourse() == null) {
+                continue;
+            }
+            Long cid = t.getCourse().getId();
+            out.computeIfAbsent(cid, k -> new EnumMap<>(TourLanguage.class)).put(t.getLanguage(), t);
+        }
+        return out;
+    }
+
+    private TourCourseTranslation resolveCourseTranslation(
+            TourCourse course,
+            TourLanguage lang,
+            Map<Long, Map<TourLanguage, TourCourseTranslation>> translationsByCourse) {
+        if (course == null) {
+            return TourCourseTranslation.builder().title("").hashtags("").build();
+        }
+        Map<TourLanguage, TourCourseTranslation> byLang = translationsByCourse.get(course.getId());
+        if (byLang != null) {
+            TourCourseTranslation preferred = byLang.get(lang);
+            if (preferred != null) {
+                return preferred;
+            }
+            TourCourseTranslation kor = byLang.get(TourLanguage.KOR);
+            if (kor != null) {
+                return kor;
+            }
+        }
+        return TourCourseTranslation.builder()
+                .title(course.getTitle())
+                .hashtags(course.getHashtags())
+                .build();
     }
 
     /**
