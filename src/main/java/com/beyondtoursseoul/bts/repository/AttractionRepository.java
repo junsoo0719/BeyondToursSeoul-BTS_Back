@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 
 public interface AttractionRepository extends JpaRepository<Attraction, Long> {
@@ -72,4 +73,45 @@ public interface AttractionRepository extends JpaRepository<Attraction, Long> {
             @Param("categoryKeyword") String categoryKeyword,
             Pageable pageable
     );
+
+    /**
+     * 기준점에서 가장 가까운 관광지(제외 ID 제외). PostGIS geography 거리(m) 기준.
+     */
+    @Query(value = """
+            SELECT a.id FROM attraction a
+            WHERE a.geom IS NOT NULL
+              AND a.id NOT IN (:excludeIds)
+            ORDER BY ST_Distance(
+                a.geom::geography,
+                ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+            )
+            LIMIT 1
+            """, nativeQuery = true)
+    List<Long> findNearestAttractionIdExcluding(
+            @Param("lon") double lon,
+            @Param("lat") double lat,
+            @Param("excludeIds") Collection<Long> excludeIds);
+
+    /**
+     * 기준점에서 {@code minMeters} 이상 떨어진 가장 가까운 관광지(제외 ID 제외).
+     */
+    @Query(value = """
+            SELECT a.id FROM attraction a
+            WHERE a.geom IS NOT NULL
+              AND a.id NOT IN (:excludeIds)
+              AND ST_Distance(
+                a.geom::geography,
+                ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+              ) >= :minMeters
+            ORDER BY ST_Distance(
+                a.geom::geography,
+                ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+            )
+            LIMIT 1
+            """, nativeQuery = true)
+    List<Long> findNearestAttractionIdBeyondMetersExcluding(
+            @Param("lon") double lon,
+            @Param("lat") double lat,
+            @Param("minMeters") double minMeters,
+            @Param("excludeIds") Collection<Long> excludeIds);
 }
