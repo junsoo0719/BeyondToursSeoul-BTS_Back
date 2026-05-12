@@ -69,50 +69,50 @@ public class TourController {
         return ResponseEntity.ok(tourQueryService.getEventDetail(contentId, lang));
     }
 
-    /**
-     * 1. API 호출 결과 DTO로 즉시 확인 (DB 저장 X)
-     */
-    @Operation(summary = "관광공사 API 원본 데이터 확인", description = "DB에 저장하지 않고 API 결과만 DTO로 반환합니다.")
-    @GetMapping("/test/fetch")
-    public ResponseEntity<TourApiResponseDto<TourApiEventItemDto>> fetchTest(
-            @Parameter(description = "수집할 언어 설정", example = "KOR")
-            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
-
-        TourApiResponseDto<TourApiEventItemDto> result = tourApiService.getRawFestivals(lang);
-        return ResponseEntity.ok(result);
-    }
-
-    /**
-     * 2. API 호출 후 DB 동기화 실행 (전체)
-     */
-    @Operation(summary = "관광공사 데이터 DB 전체 동기화 실행", description = "API 데이터를 긁어와서 우리 DB에 전체 저장/업데이트합니다.")
-    @GetMapping("/test/sync-all")
-    public ResponseEntity<String> syncAllTest(
-            @Parameter(description = "수집할 언어 설정", example = "KOR")
-            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
-
-        try {
-            tourApiService.syncFestivals(lang);
-            return ResponseEntity.ok("Successfully synced " + lang + " all data to database.");
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body("Sync failed: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 3. 딱 한 건의 데이터만 DB 동기화 실행 (테스트용)
-     */
-    @Operation(summary = "관광공사 데이터 DB 단건 동기화 실행", description = "API 데이터 중 첫 번째 한 건만 상세 정보(개요, 장소, 요금, 이미지 등)를 포함하여 저장합니다.")
-    @GetMapping("/test/sync-one")
-    public ResponseEntity<String> syncOneTest(
-            @Parameter(description = "수집할 언어 설정", example = "KOR")
-            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
-
-        try {
-            tourApiService.syncOneFestival(lang);
-            return ResponseEntity.ok("Successfully synced " + lang + " ONE data with details to database.");
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body("Sync failed: " + e.getMessage());
-        }
-    }
+//    /**
+//     * 1. API 호출 결과 DTO로 즉시 확인 (DB 저장 X)
+//     */
+//    @Operation(summary = "관광공사 API 원본 데이터 확인", description = "DB에 저장하지 않고 API 결과만 DTO로 반환합니다.")
+//    @GetMapping("/test/fetch")
+//    public ResponseEntity<TourApiResponseDto<TourApiEventItemDto>> fetchTest(
+//            @Parameter(description = "수집할 언어 설정", example = "KOR")
+//            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
+//
+//        TourApiResponseDto<TourApiEventItemDto> result = tourApiService.getRawFestivals(lang);
+//        return ResponseEntity.ok(result);
+//    }
+//
+//    /**
+//     * 2. API 호출 후 DB 동기화 실행 (전체)
+//     */
+//    @Operation(summary = "관광공사 데이터 DB 전체 동기화 실행", description = "API 데이터를 긁어와서 우리 DB에 전체 저장/업데이트합니다.")
+//    @GetMapping("/test/sync-all")
+//    public ResponseEntity<String> syncAllTest(
+//            @Parameter(description = "수집할 언어 설정", example = "KOR")
+//            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
+//
+//        try {
+//            tourApiService.syncFestivals(lang);
+//            return ResponseEntity.ok("Successfully synced " + lang + " all data to database.");
+//        } catch (Exception e) {
+//            return ResponseEntity.internalServerError().body("Sync failed: " + e.getMessage());
+//        }
+//    }
+//
+//    /**
+//     * 3. 딱 한 건의 데이터만 DB 동기화 실행 (테스트용)
+//     */
+//    @Operation(summary = "관광공사 데이터 DB 단건 동기화 실행", description = "API 데이터 중 첫 번째 한 건만 상세 정보(개요, 장소, 요금, 이미지 등)를 포함하여 저장합니다.")
+//    @GetMapping("/test/sync-one")
+//    public ResponseEntity<String> syncOneTest(
+//            @Parameter(description = "수집할 언어 설정", example = "KOR")
+//            @RequestParam(defaultValue = "KOR") TourLanguage lang) {
+//
+//        try {
+//            tourApiService.syncOneFestival(lang);
+//            return ResponseEntity.ok("Successfully synced " + lang + " ONE data with details to database.");
+//        } catch (Exception e) {
+//            return ResponseEntity.internalServerError().body("Sync failed: " + e.getMessage());
+//        }
+//    }
 }
